@@ -2,7 +2,7 @@
 
 以 SwiftUI 製作的個人 iPhone 影音工具。目標是整合本機檔案管理、多格式播放，以及透過 FFmpeg 處理平台影音下載。
 
-目前版本 **0.4.0 加入免費 a-Shell／FFmpeg 下載橋接**：App 建立本機任務，以 yt-dlp 及平台 extractor 解析 YouTube、Instagram、Threads、Bilibili，再由 a-Shell 的原生 FFmpeg 下載與合併。提供原畫質／1080p／720p、只取音訊、可選 Cookie、持久化狀態、取消旗標及完成後整批匯入。首次須授權 App 資料夾並安裝免費解析元件；見 [0.4 手機試用步驟與限制](docs/tryout-v0.4.md)。
+目前版本 **0.4.0 加入免費 a-Shell／FFmpeg 下載橋接**：App 建立本機任務，以 yt-dlp 及平台 extractor 解析 YouTube、Instagram、Threads、Bilibili，再由 a-Shell 的原生 FFmpeg 下載與合併。提供原畫質／1080p／720p、只取音訊、可選 Cookie、持久化狀態、取消旗標及完成後整批匯入。首次須授權 MediaPocketBridge 子資料夾並安裝免費解析元件；見 [0.4 手機試用步驟與限制](docs/tryout-v0.4.md)。
 
 保留檔案管理、垃圾桶與雙播放引擎、自訂播放控制、真正的前／後一幀、毫秒時間、雙指 1–8 倍縮放、放大拖曳與雙擊重置。逐幀先暫停，再由引擎選擇相鄰畫格，不使用 `1 / 平均 fps` 的時間跳轉冒充逐幀。
 

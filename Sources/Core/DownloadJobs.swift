@@ -159,7 +159,7 @@ actor DownloadStore {
     }
 
     static func command(for id: UUID) -> String {
-        "jump MediaPocket; python3 MediaPocketBridge/runner.py --job \(id.uuidString)"
+        "jump MediaPocketBridge; python3 runner.py --job \(id.uuidString)"
     }
 
     private func jobDirectory(_ id: UUID) -> URL {

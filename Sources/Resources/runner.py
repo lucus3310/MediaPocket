@@ -395,7 +395,7 @@ def main():
             run_job(bridge, arguments.job, runtime)
         except Exception as error:
             print("無法啟動任務：" + safe_error(error))
-            print("請重新授權 MediaPocket 最外層資料夾，或在 App 建立新任務。")
+            print("請重新授權 MediaPocket 裡的 MediaPocketBridge 子資料夾，或在 App 建立新任務。")
 
 
 if __name__ == "__main__":

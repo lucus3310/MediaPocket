@@ -5,7 +5,7 @@
 ## 手機首次設定
 
 1. 在 App Store 安裝免費完整版 [a-Shell](https://apps.apple.com/app/a-shell/id1473805438)。
-2. MediaPocket → 下載 → 首次使用 →「1. 授權 MediaPocket 資料夾」。選「瀏覽 → 我的 iPhone → MediaPocket」最外層，再按開啟。不要選裡面的 Media。
+2. MediaPocket → 下載 → 首次使用 →「1. 授權下載交接資料夾」。選「瀏覽 → 我的 iPhone → MediaPocket → MediaPocketBridge」子資料夾，進入後按開啟。不要選 App 最外層或 Media；iOS 可能把最外層實際命名為 Documents，導致書籤名稱不符。這個步驟會重設舊的 MediaPocketBridge 書籤。
 3. 返回 MediaPocket，按「2. 安裝／更新解析元件並檢查 FFmpeg」。等待 a-Shell 安裝純 Python 套件、檢查 FFmpeg 與 ffprobe；完成後會嘗試返回 App，也可手動返回。
 4. 顯示「已就緒」後，貼上影片／貼文連結，選原畫質、1080p 或 720p，按「交給 a-Shell 下載」。只取音訊可開啟對應開關。
 5. 下載期間保持 a-Shell 在前景。完成後返回 MediaPocket，必要時按重新整理。成品在「檔案庫 → Downloads → 任務編號」。
