@@ -168,8 +168,10 @@ private struct DownloadJobRow: View {
             } else if let path = job.libraryPath {
                 Label("已匯入檔案庫", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text(path).font(.caption).textSelection(.enabled)
-                NavigationLink("播放／管理下載成品", systemImage: "play.rectangle") {
+                NavigationLink {
                     LibraryFolderView(library: library, path: path)
+                } label: {
+                    Label("播放／管理下載成品", systemImage: "play.rectangle")
                 }
             } else if job.status?.phase == "awaitingSelection", let catalog = job.catalog {
                 Button { showFormats = true } label: {
@@ -203,7 +205,7 @@ private struct DownloadJobRow: View {
                 if job.status?.terminal == true || job.request.requiresSelection != true || job.status?.phase == "awaitingSelection" {
                     if job.request.selection != nil && ["failed", "cancelled"].contains(job.status?.phase ?? "") {
                         Button("重試／續傳相同任務", systemImage: "arrow.clockwise") { Task { await model.retry(job.id) } }
-                        if ![nil, "original", "auto"].contains(job.request.outputProfile) {
+                        if let output = job.request.outputProfile, !["original", "auto"].contains(output) {
                             Button("改用原編碼重試（沿用軌道暫存）") { Task { await model.retry(job.id, original: true) } }
                         }
                     }
