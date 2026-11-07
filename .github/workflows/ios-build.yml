@@ -1,0 +1,55 @@
+name: Build unsigned iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Sources/**
+      - scripts/**
+      - project.yml
+      - .github/workflows/ios-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # This is a STANDARD public-repository runner, not a paid larger runner.
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - name: Require a public repository for the zero-cost build
+        env:
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          if [ "$REPOSITORY_VISIBILITY" != public ]; then
+            echo 'This workflow is restricted to public repositories.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install project generator
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: Compile Simulator and iPhone builds and package IPA
+        run: bash scripts/build-ios.sh
+
+      - name: Upload unsigned IPA and verification metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaPocket-unsigned-${{ github.run_number }}
+          path: build/artifacts/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
