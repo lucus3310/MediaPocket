@@ -20,7 +20,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from urllib.parse import parse_qs, quote, urlparse
 import uuid
 
@@ -206,7 +205,7 @@ def inputs_for(entry, ydl, audio_only):
             raise ValueError("來源網址格式錯誤。")
         headers = dict(entry.get("http_headers") or {})
         headers.update(fmt.get("http_headers") or {})
-        cookie = ydl.cookiejar.get_cookie_header(urllib.request.Request(url))
+        cookie = ydl.cookiejar.get_cookie_header(url)
         if cookie:
             headers["Cookie"] = cookie
         selected.append((fmt, url, headers))

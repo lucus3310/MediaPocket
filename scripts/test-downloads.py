@@ -2,6 +2,7 @@
 """Offline contract tests plus real FFmpeg HTTP/track integration on macOS CI."""
 import contextlib
 import functools
+from http.cookiejar import Cookie
 import http.server
 import importlib.util
 import json
@@ -55,6 +56,16 @@ class Contracts(unittest.TestCase):
         text = runner.safe_error(ValueError("failed https://cdn.test/file?token=SECRET Cookie: PRIVATE"))
         self.assertNotIn("SECRET", text)
         self.assertNotIn("PRIVATE", text)
+
+    def test_real_ytdlp_cookiejar_contract(self):
+        from yt_dlp.cookies import YoutubeDLCookieJar
+        jar = YoutubeDLCookieJar()
+        jar.set_cookie(Cookie(0, "session", "local", None, False, "cdn.test", False, False,
+                              "/", True, True, None, True, None, None, {}))
+        class YDL:
+            cookiejar = jar
+        inputs = runner.inputs_for({"url": "https://cdn.test/video.mp4", "protocol": "https", "acodec": "aac"}, YDL(), False)
+        self.assertEqual(inputs[0][2]["Cookie"], "session=local")
 
     def test_native_runtime_quotes_untrusted_arguments(self):
         import shlex
@@ -127,11 +138,12 @@ class FFmpegIntegration(unittest.TestCase):
 
     @contextlib.contextmanager
     def extraction(self, request, bridge):
-        class Jar:
-            def get_cookie_header(self, _):
-                return "session=local"
+        from yt_dlp.cookies import YoutubeDLCookieJar
+        jar = YoutubeDLCookieJar()
+        jar.set_cookie(Cookie(0, "session", "local", None, False, "127.0.0.1", False, False,
+                              "/", True, False, None, True, None, None, {}))
         class YDL:
-            cookiejar = Jar()
+            cookiejar = jar
         formats = [{"url": self.url + "/video.mp4", "protocol": "http", "acodec": "none"},
                    {"url": self.url + "/audio.m4a", "protocol": "http", "acodec": "aac"}]
         yield YDL(), [{"title": "Fixture", "duration": 2, "requested_formats": formats,
