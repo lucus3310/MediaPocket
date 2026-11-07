@@ -37,7 +37,7 @@ Path('build/artifacts/playback-tests.json').write_text(json.dumps({
 }, indent=2) + '\n')
 container = Path(run('xcrun', 'simctl', 'get_app_container', identifier,
                      'io.github.lucus3310.MediaPocket', 'data', capture_output=True, text=True).stdout.strip())
-for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png', 'DownloadCenter-home.png']:
+for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png', 'DownloadCenter-home.png', 'DownloadCenter-quality.png']:
     shutil.copyfile(container / 'Documents/InterfaceReview' / name, Path('build/artifacts') / name)
 
 # Relaunch the actual app process; recreating a Swift store alone does not

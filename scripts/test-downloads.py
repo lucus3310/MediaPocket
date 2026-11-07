@@ -153,6 +153,45 @@ class Contracts(unittest.TestCase):
                     adapter._real_extract("https://www.threads.com/share/unknown")
 
 
+class QualityCatalogTests(unittest.TestCase):
+    def entry(self, identity="one", heights=(360, 720, 1080)):
+        formats = [{"format_id": str(height), "height": height, "vcodec": "h264", "acodec": "none",
+                    "protocol": "https", "url": f"https://cdn.test/{height}?token=PRIVATE"} for height in heights]
+        formats += [{"format_id": "audio", "vcodec": "none", "acodec": "aac", "protocol": "https", "url": "https://cdn.test/audio"},
+                    {"height": 2160, "vcodec": "av1", "has_drm": True, "url": "https://cdn.test/drm"},
+                    {"height": 4320, "vcodec": "av1", "protocol": "http_dash_segments", "url": "https://cdn.test/dash"}]
+        return {"id": identity, "title": "Fixture", "formats": formats}
+
+    def test_catalog_contains_actual_common_qualities_without_source_urls(self):
+        entries = [self.entry(), self.entry("two", (720,))]
+        catalog = runner.quality_catalog(entries, "token")
+        self.assertEqual([option["id"] for option in catalog["options"]], ["video:best", "video:720", "audio:best"])
+        self.assertNotIn("PRIVATE", json.dumps(catalog))
+        self.assertNotIn("https://", json.dumps(catalog))
+        chosen = runner.apply_selection(entries, catalog, "video:720")
+        self.assertTrue(all(entry["requested_formats"][0]["height"] == 720 for entry in chosen))
+        self.assertTrue(all(entry["requested_formats"][1]["acodec"] == "aac" for entry in chosen))
+        best = runner.apply_selection(entries, catalog, "video:best")
+        self.assertEqual([entry["requested_formats"][0]["height"] for entry in best], [1080, 720])
+
+    def test_stale_resolution_and_changed_post_never_silently_downgrade(self):
+        catalog = runner.quality_catalog([self.entry()], "token")
+        for entries, selection in [([self.entry(heights=(360,))], "video:1080"),
+                                   ([self.entry("different")], "video:720"),
+                                   ([self.entry()], "video:2160")]:
+            with self.assertRaises(ValueError):
+                runner.apply_selection(entries, catalog, selection)
+        with self.assertRaises(ValueError):
+            runner.quality_catalog([dict(self.entry(), is_live=True)], "token")
+
+    def test_audio_and_unknown_resolution_are_not_fabricated(self):
+        entry = {"id": "silent", "formats": [{"url": "https://cdn.test/silent", "vcodec": "h264", "acodec": "none"}]}
+        catalog = runner.quality_catalog([entry], "token")
+        self.assertEqual([option["id"] for option in catalog["options"]], ["video:best"])
+        selected = runner.apply_selection([self.entry()], runner.quality_catalog([self.entry()], "token"), "audio:best")
+        self.assertEqual(selected[0]["requested_formats"][0]["vcodec"], "none")
+
+
 class AuthorizedHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get("Cookie") != "session=local" or self.headers.get("Referer") != "https://www.bilibili.com/":
@@ -223,6 +262,41 @@ class FFmpegIntegration(unittest.TestCase):
             runner.run_job(self.bridge, job_id, self.runtime, self.extraction)
             self.assertEqual(size, output.stat().st_size)
 
+    def test_probe_app_selection_then_real_ffmpeg_download(self):
+        shutil.copyfile(self.base / "video.mp4", self.base / "video-current.mp4")
+        shutil.copyfile(self.base / "audio.m4a", self.base / "audio-current.m4a")
+        @contextlib.contextmanager
+        def catalog_extraction(request, bridge):
+            with self.extraction(request, bridge) as (ydl, entries):
+                for entry in entries:
+                    entry["id"] = "fixture"
+                    entry["formats"] = [dict(entry["requested_formats"][0], format_id="v90", height=90, vcodec="h264"),
+                                        dict(entry["requested_formats"][1], format_id="a", vcodec="none")]
+                    if request.get("selection"):
+                        for fmt in entry["formats"]:
+                            fmt["url"] = fmt["url"].replace("video.mp4", "video-current.mp4").replace("audio.m4a", "audio-current.m4a")
+                yield ydl, entries
+        for choice, audio in (("video:90", False), ("audio:best", True)):
+            job_id, slot = self.request()
+            request = json.loads((slot / "request.json").read_text())
+            request["requiresSelection"] = True
+            runner.atomic_json(slot / "request.json", request)
+            with patch.object(self.runtime, "run", wraps=self.runtime.run) as transfer:
+                runner.run_job(self.bridge, job_id, self.runtime, catalog_extraction, probe=True)
+                transfer.assert_not_called()
+            self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "awaitingSelection")
+            self.assertFalse((slot / "output").exists())
+            catalog = json.loads((slot / "catalog.json").read_text())
+            self.assertIn(choice, [option["id"] for option in catalog["options"]])
+            for stale in ("video.mp4", "audio.m4a"):
+                (self.base / stale).unlink(missing_ok=True)
+            request.update(selection=choice, audioOnly=audio)
+            runner.atomic_json(slot / "request.json", request)
+            runner.run_job(self.bridge, job_id, self.runtime, catalog_extraction)
+            status = json.loads((slot / "status.json").read_text())
+            self.assertEqual(status["phase"], "complete", status)
+            self.assertTrue((slot / "output" / ("001.mka" if audio else "001.mkv")).is_file())
+
     def test_cancel_and_corrupt_output_do_not_complete(self):
         job_id, slot = self.request()
         (slot / "cancel").touch()
@@ -274,6 +348,7 @@ if __name__ == "__main__":
         "realFFmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
         "physicalIphone": False, "livePlatformDownloads": False,
         "checks": ["four platform URL routing", "strict Threads post matching", "HTTP auth headers",
-                   "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion"]
+                   "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion",
+                   "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection"]
     })
     raise SystemExit(not result.wasSuccessful())

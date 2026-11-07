@@ -23,7 +23,7 @@ import time
 from urllib.parse import parse_qs, quote, urlparse
 import uuid
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -223,7 +223,7 @@ def extractor(request, bridge):
         entries = list(info.get("entries") or [info]) if info else []
         if not entries or len(entries) > 20 or any(item is None for item in entries):
             raise ValueError("這則貼文沒有可下載的影片，或包含超過 20 段影片。")
-        print(f"[MediaPocket] 解析完成：{len(entries)} 段，接著啟動 FFmpeg。", flush=True)
+        print(f"[MediaPocket] 解析完成：{len(entries)} 段，已取得來源與格式。", flush=True)
         yield ydl, entries
 
 
@@ -249,6 +249,76 @@ def inputs_for(entry, ydl, audio_only):
     if not selected:
         raise ValueError("這段影片沒有可下載的音訊。")
     return selected
+
+
+def available_formats(entry):
+    # yt-dlp orders formats from lower to higher preference. Keep only transports
+    # this FFmpeg bridge implements; never advertise DRM, storyboards or DASH fragments.
+    return [fmt for fmt in (entry.get("formats") or [entry])
+            if not entry.get("has_drm") and not fmt.get("has_drm")
+            and fmt.get("protocol", urlparse(fmt.get("url", "")).scheme) in MEDIA_PROTOCOLS
+            and urlparse(fmt.get("url", "")).scheme in ("http", "https")]
+
+
+def video_format(fmt):
+    return fmt.get("vcodec") != "none" and (
+        fmt.get("vcodec") is not None or bool(fmt.get("height")) or bool(fmt.get("width")))
+
+
+def audio_format(fmt):
+    return fmt.get("acodec") not in (None, "none")
+
+
+def resolution(fmt):
+    value = fmt.get("height")
+    return int(value) if isinstance(value, (int, float)) and math.isfinite(value) and 0 < value <= 16384 else 0
+
+
+def quality_catalog(entries, token):
+    if not entries or len(entries) > 20 or any(entry.get("is_live") for entry in entries):
+        raise ValueError("目前僅支援已結束的影片貼文，每則最多 20 段。")
+    formats = [available_formats(entry) for entry in entries]
+    options = []
+    if all(any(video_format(fmt) for fmt in group) for group in formats):
+        options.append({"id": "video:best", "label": "各片最高可用畫質" if len(entries) > 1 else "最高可用畫質", "audioOnly": False})
+        heights = set.intersection(*[{resolution(fmt) for fmt in group if video_format(fmt) and resolution(fmt)} for group in formats])
+        for height in sorted(heights, reverse=True)[:40]:
+            options.append({"id": f"video:{height}", "label": f"{height}p", "audioOnly": False, "height": height})
+    if all(any(audio_format(fmt) for fmt in group) for group in formats):
+        options.append({"id": "audio:best", "label": "只下載音訊・原編碼", "audioOnly": True})
+    if not options:
+        raise ValueError("沒有可由 FFmpeg 下載的共同影音格式。來源可能受限或使用不支援的傳輸格式。")
+    return {"schema": 1, "token": token, "title": str(entries[0].get("title") or "影片")[:200],
+            "identities": [str(entry.get("id", index)) for index, entry in enumerate(entries)],
+            "options": options, "updated": time.time()}
+
+
+def apply_selection(entries, catalog, selection):
+    if catalog.get("schema") != 1 or catalog.get("identities") != [str(entry.get("id", index)) for index, entry in enumerate(entries)]:
+        raise ValueError("貼文內容已變更，請在 App 重新取得可用畫質。")
+    option = next((item for item in catalog["options"] if item["id"] == selection), None)
+    if not option:
+        raise ValueError("畫質選擇失效，請在 App 重新解析。")
+    selected_entries = []
+    for entry in entries:
+        formats = available_formats(entry)
+        audio = [fmt for fmt in formats if audio_format(fmt)]
+        audio_only = [fmt for fmt in audio if not video_format(fmt)]
+        best_audio = (audio_only or audio)[-1] if audio else None
+        if option["audioOnly"]:
+            if best_audio is None:
+                raise ValueError("選定音訊已不可用，請重新取得畫質。")
+            chosen = [best_audio]
+        else:
+            videos = [fmt for fmt in formats if video_format(fmt) and (option.get("height") is None or resolution(fmt) == option["height"])]
+            if not videos:
+                raise ValueError("選定畫質已不可用，未降級下載；請在 App 重新解析。")
+            video = max(enumerate(videos), key=lambda pair: (resolution(pair[1]), pair[0]))[1]
+            chosen = [video]
+            if not audio_format(video) and best_audio is not None and best_audio is not video:
+                chosen.append(best_audio)
+        selected_entries.append(dict(entry, requested_formats=chosen))
+    return selected_entries
 
 
 def ffmpeg_command(inputs, output, progress, audio_only):
@@ -303,7 +373,7 @@ def progress_value(path, duration):
         return None
 
 
-def run_job(bridge, job_id, runtime, extraction=extractor):
+def run_job(bridge, job_id, runtime, extraction=extractor, probe=False):
     job_id = str(uuid.UUID(job_id)).upper()
     slot = bridge / "jobs" / job_id
     if slot.is_symlink() or slot.resolve().parent != (bridge / "jobs").resolve():
@@ -319,16 +389,18 @@ def run_job(bridge, job_id, runtime, extraction=extractor):
         except BlockingIOError:
             print("另一個下載正在執行，請完成後再啟動此任務。")
             return
-        _execute_job(bridge, slot, job_id, runtime, extraction)
+        _execute_job(bridge, slot, job_id, runtime, extraction, probe)
 
 
-def _execute_job(bridge, slot, job_id, runtime, extraction):
+def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
     request = json.loads((slot / "request.json").read_text(encoding="utf-8"))
     if str(uuid.UUID(request["id"])).upper() != job_id or platform_for(request["url"]) != request["platform"]:
         raise ValueError("任務資料與平台不一致。")
     if request["quality"] not in ("best", "1080", "720") or not isinstance(request["audioOnly"], bool):
         raise ValueError("畫質設定不正確。")
     token = str(uuid.UUID(request["token"])).upper()
+    if request.get("method") == "smgShortcut":
+        raise ValueError("這是舊版外部交接紀錄，請在 App 重新解析連結。")
     if (slot / "imported.json").exists():
         runtime.callback(job_id, token)
         return
@@ -354,6 +426,21 @@ def _execute_job(bridge, slot, job_id, runtime, extraction):
     update()
     try:
         check_cancel()
+        if probe:
+            update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後返回 App 選擇。")
+            with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
+                catalog = quality_catalog(entries, token)
+                check_cancel()
+                atomic_json(slot / "catalog.json", catalog)
+            update(phase="awaitingSelection", message="可用畫質已取得，請在 App 選擇後開始下載。", title=catalog["title"])
+            print(status["message"], flush=True)
+            try:
+                runtime.callback(job_id, token)
+            except Exception:
+                print("[MediaPocket] 無法自動返回；請手動回 App 選畫質。", flush=True)
+            return
+        if request.get("requiresSelection") and not request.get("selection"):
+            raise ValueError("請先回 App 選擇畫質；尚未開始下載。")
         output_dir = slot / "output"
         output_dir.mkdir(exist_ok=True)
         if output_dir.is_symlink():
@@ -365,6 +452,11 @@ def _execute_job(bridge, slot, job_id, runtime, extraction):
             old.unlink()
         outputs = []
         with extraction(request, bridge) as (ydl, entries):
+            if request.get("requiresSelection"):
+                catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
+                if catalog.get("token") != token:
+                    raise ValueError("畫質清單不屬於此任務，請重新解析。")
+                entries = apply_selection(entries, catalog, request["selection"])
             for index, entry in enumerate(entries, 1):
                 check_cancel()
                 if entry.get("is_live"):
@@ -421,7 +513,7 @@ def record_startup_failure(bridge, arguments, error):
         if arguments.setup:
             destination, token = bridge / "setup.json", "setup"
         else:
-            job_id = str(uuid.UUID(arguments.job)).upper()
+            job_id = str(uuid.UUID(arguments.job or getattr(arguments, "probe", None))).upper()
             root = bridge / "jobs"
             slot = root / job_id
             if slot.is_symlink() or slot.resolve().parent != root.resolve():
@@ -448,6 +540,7 @@ def main():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--setup", action="store_true")
     actions.add_argument("--job")
+    actions.add_argument("--probe")
     arguments = parser.parse_args()
     bridge = Path(__file__).resolve().parent
     print(f"[MediaPocket] MediaPocket 下載程式已啟動 v{VERSION} · Python {sys.version.split()[0]}", flush=True)
@@ -456,7 +549,7 @@ def main():
         if arguments.setup:
             setup(bridge, runtime)
         else:
-            run_job(bridge, arguments.job, runtime)
+            run_job(bridge, arguments.job or arguments.probe, runtime, probe=bool(arguments.probe))
     except Exception as error:
         record_startup_failure(bridge, arguments, error)
 

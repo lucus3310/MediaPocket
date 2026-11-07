@@ -2,38 +2,67 @@ import Foundation
 import Testing
 @testable import MediaPocketCore
 
-@Test("SMG handoff round-trips literal URL text without injecting callback parameters")
-func shortcutInputEncoding() throws {
-    let source = "https://www.youtube.com/watch?v=abc&x=a+b%26c#clip=00:10-00:30"
-    let url = try SMGShortcutHandoff.url(name: " SMG YouTube + 測試 ", source: source)
-    let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
-    #expect(components.scheme == "shortcuts")
-    #expect(components.host == "run-shortcut")
-    #expect(components.queryItems?.count == 3)
-    #expect(components.queryItems?.first(where: { $0.name == "name" })?.value == "SMG YouTube + 測試")
-    #expect(components.queryItems?.first(where: { $0.name == "text" })?.value == source)
-    #expect(components.queryItems?.first(where: { $0.name == "input" })?.value == "text")
-    #expect(throws: (any Error).self) { try SMGShortcutHandoff.url(name: "", source: source) }
-    #expect(throws: (any Error).self) { try SMGShortcutHandoff.url(name: "SMG YouTube", source: "https://www.instagram.com/reel/abc/") }
-}
-
-@Test("Legacy requests keep their native route; Shortcut handoff never imports or claims completion")
-func shortcutJobPersistence() async throws {
+@Test("App selection survives restart, rejects unoffered options and queues without importing media")
+func catalogSelectionPersistence() async throws {
     let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: base) }
     let library = MediaLibrary(directory: base.appending(path: "Media"))
     let store = DownloadStore(directory: base.appending(path: "Bridge"), library: library)
-    let request = try await store.create(url: "https://b23.tv/abc", quality: "best", audioOnly: false, method: .smgShortcut)
-    try await store.markShortcutHandoff(request)
+    let request = try await store.create(url: "https://b23.tv/abc?x=a+b%26c", requiresSelection: true)
+    let slot = base.appending(path: "Bridge/jobs/\(request.id.uuidString)")
+    let catalog = DownloadCatalog(schema: 1, token: request.token, title: "Fixture", options: [
+        DownloadOption(id: "video:1080", label: "1080p", audioOnly: false),
+        DownloadOption(id: "audio:best", label: "只下載音訊", audioOnly: true)
+    ])
+    try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
+    let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)
+    try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
     let restored = try #require(try await store.jobs().first)
-    #expect(restored.request.executionMethod == .smgShortcut)
-    #expect(restored.status?.phase == "shortcut")
+    #expect(restored.request.executionMethod == .ashell)
+    #expect(restored.catalog?.options.map(\.id) == ["video:1080", "audio:best"])
+    #expect(restored.status?.phase == "awaitingSelection")
     #expect(restored.status?.terminal == false)
     #expect(restored.libraryPath == nil)
+    await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: "video:2160") }
+    let selected = try await store.select(request.id, optionID: "audio:best")
+    #expect(selected.selection == "audio:best" && selected.audioOnly)
+    let queued = try #require(try await store.jobs().first)
+    #expect(queued.status?.phase == "queued" && queued.libraryPath == nil)
+    await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: "video:1080") }
+    let command = DownloadStore.command(for: request.id, probe: true)
+    #expect(command.contains("--probe") && !command.contains("a+b"))
+}
+
+@Test("Pre-catalog and retired Shortcut jobs remain readable without executing a Shortcut")
+func legacyDownloadDecoding() throws {
+    let request = DownloadRequest(id: UUID(), token: UUID().uuidString, url: "https://youtu.be/abc", platform: .youtube,
+                                  quality: "1080", audioOnly: false, created: 1, method: .ashell)
     var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
     legacy.removeValue(forKey: "method")
+    legacy.removeValue(forKey: "requiresSelection")
+    legacy.removeValue(forKey: "selection")
     let decoded = try JSONDecoder().decode(DownloadRequest.self, from: JSONSerialization.data(withJSONObject: legacy))
     #expect(decoded.executionMethod == .ashell)
+    #expect(decoded.requiresSelection == nil && decoded.selection == nil)
+    legacy["method"] = "smgShortcut"
+    #expect(try JSONDecoder().decode(DownloadRequest.self, from: JSONSerialization.data(withJSONObject: legacy)).executionMethod == .smgShortcut)
+}
+
+@Test("Catalog selection rejects another job's token and unsupported schema")
+func rejectedCatalogIdentity() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let store = DownloadStore(directory: base.appending(path: "Bridge"), library: MediaLibrary(directory: base.appending(path: "Media")))
+    let request = try await store.create(url: "https://youtu.be/abc", requiresSelection: true)
+    let slot = base.appending(path: "Bridge/jobs/\(request.id.uuidString)")
+    let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)
+    try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
+    for (schema, token) in [(1, "another-job"), (2, request.token)] {
+        let catalog = DownloadCatalog(schema: schema, token: token, title: "Fixture", options: [DownloadOption(id: "video:720", label: "720p", audioOnly: false)])
+        try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
+        await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: "video:720") }
+        #expect(try await store.jobs().first?.request.selection == nil)
+    }
 }
 
 @Test("Platform URLs are restricted to supported hosts and individual posts", arguments: [

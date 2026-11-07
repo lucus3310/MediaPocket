@@ -314,7 +314,9 @@ private func saveDockReview() async throws {
         window.isHidden = true
     }
     let library = MediaLibrary()
-    let downloads = DownloadCenterModel(store: DownloadStore(library: library))
+    let downloadStore = DownloadStore(directory: folder.appending(path: "DownloadFixture"), library: library)
+    let downloads = DownloadCenterModel(store: downloadStore)
+    await downloads.prepare()
     let view = NavigationStack {
         DownloadCenterView(model: downloads, sources: SourceLibraryModel())
     }.preferredColorScheme(.dark).tint(.white)
@@ -328,6 +330,22 @@ private func saveDockReview() async throws {
     let renderer = UIGraphicsImageRenderer(bounds: controller.view.bounds)
     let image = renderer.image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
     try #require(image.pngData()).write(to: folder.appending(path: "DownloadCenter-home.png"))
+    let request = try await downloadStore.create(url: "https://youtu.be/offline-fixture", requiresSelection: true)
+    let slot = folder.appending(path: "DownloadFixture/jobs/\(request.id.uuidString)")
+    let catalog = DownloadCatalog(schema: 1, token: request.token, title: "離線畫質選單測試", options: [
+        DownloadOption(id: "video:1080", label: "1080p", audioOnly: false),
+        DownloadOption(id: "video:720", label: "720p", audioOnly: false),
+        DownloadOption(id: "audio:best", label: "只下載音訊・原編碼", audioOnly: true)
+    ])
+    try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
+    let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", title: catalog.title, token: request.token, updated: 1)
+    try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
+    let setup = DownloadStatus(phase: "ready", message: "Offline test fixture", token: "setup", updated: 1)
+    try JSONEncoder().encode(setup).write(to: folder.appending(path: "DownloadFixture/setup.json"))
+    await downloads.refresh()
+    try await Task.sleep(for: .milliseconds(250))
+    let selectionImage = renderer.image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
+    try #require(selectionImage.pngData()).write(to: folder.appending(path: "DownloadCenter-quality.png"))
     window.isHidden = true
 }
 

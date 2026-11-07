@@ -10,7 +10,9 @@
   "callbackPrefix": "SMG131:",
   "steps": ["plain URL input", "whole video or clip menu", "Base64 of menu result", "scan", "SMG131 task callback", "read task JSON", "choose format", "download"],
   "resultFoldersRelativeToMiniDocuments": ["youtube", "bilibili"],
-  "handoff": "shortcuts://run-shortcut with percent-encoded name, input=text, and text=source URL",
-  "completionReporting": "No final result imported or assumed; use a linked original output folder",
+  "referenceOnly": true,
+  "appExecutionDependency": false,
+  "observedLegacyHandoff": "shortcuts://run-shortcut with text input; retired from MediaPocket in v0.8",
+  "currentAppFlow": "App -> a-Shell probe -> App quality selection -> a-Shell FFmpeg -> App validated import",
   "physicalIphoneIntegrationVerified": false
 }
