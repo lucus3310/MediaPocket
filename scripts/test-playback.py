@@ -1,0 +1,32 @@
+"""Run the real AVPlayer/VLC sample-step tests on an available iOS Simulator."""
+import json
+from pathlib import Path
+import subprocess
+
+
+def run(*args, **kwargs):
+    return subprocess.run(args, check=True, **kwargs)
+
+
+devices = json.loads(run('xcrun', 'simctl', 'list', 'devices', 'available', '--json', capture_output=True, text=True).stdout)
+phones = [device for runtime, group in devices['devices'].items() if 'iOS-27' in runtime
+          for device in group if 'iPhone' in device['name'] and device.get('isAvailable')]
+if not phones:
+    raise RuntimeError('No installed iOS 27 iPhone Simulator is available')
+device = sorted(phones, key=lambda d: (d['name'] != 'iPhone 16', d['name']))[0]
+identifier = device['udid']
+print(f"Playback test device: {device['name']} ({identifier})", flush=True)
+if device['state'] != 'Booted':
+    run('xcrun', 'simctl', 'boot', identifier)
+run('xcrun', 'simctl', 'bootstatus', identifier, '-b', timeout=240)
+run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'MediaPocket',
+    '-configuration', 'Debug', '-destination', f'id={identifier}',
+    '-derivedDataPath', 'build/Simulator', '-resultBundlePath', 'build/PlaybackTests.xcresult',
+    '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
+    '-maximum-test-execution-time-allowance', '120',
+    'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_REQUIRED=NO', timeout=900)
+Path('build/artifacts/playback-tests.json').write_text(json.dumps({
+    'device': device['name'], 'result': 'passed', 'physicalIphone': False,
+    'checks': ['CFR and VFR native adjacent-frame timestamps', 'VLC next and previous frame callbacks',
+               '8x renderer transform, pan, player preservation and rotation reset']
+}, indent=2) + '\n')

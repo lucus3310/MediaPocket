@@ -34,6 +34,8 @@ private struct SettingsView: View {
                 Section("MediaPocket") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
                     LabeledContent("播放引擎", value: "系統播放器 + VLC")
+                    LabeledContent("影片縮放", value: "雙指 1–8 倍")
+                    LabeledContent("解碼偏好", value: "硬體優先，自動回退")
                 }
                 Section {
                     TextField("記下這次試用心得", text: $installationNote, axis: .vertical)
