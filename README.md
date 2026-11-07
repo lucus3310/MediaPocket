@@ -2,13 +2,15 @@
 
 以 SwiftUI 製作的個人 iPhone 影音工具。目標是整合本機檔案管理、多格式播放，以及透過 FFmpeg 處理平台影音下載。
 
-目前版本 **0.3.0 為逐幀播放器試用版**：保留檔案管理、垃圾桶與雙播放引擎，改用自訂播放控制，加入真正的前／後一幀、毫秒時間、雙指 1–8 倍縮放、放大拖曳與雙擊重置。逐幀先暫停，再由引擎選擇相鄰畫格，不使用 `1 / 平均 fps` 的時間跳轉冒充逐幀。
+目前版本 **0.4.0 加入免費 a-Shell／FFmpeg 下載橋接**：App 建立本機任務，以 yt-dlp 及平台 extractor 解析 YouTube、Instagram、Threads、Bilibili，再由 a-Shell 的原生 FFmpeg 下載與合併。提供原畫質／1080p／720p、只取音訊、可選 Cookie、持久化狀態、取消旗標及完成後整批匯入。首次須授權 App 資料夾並安裝免費解析元件；見 [0.4 手機試用步驟與限制](docs/tryout-v0.4.md)。
+
+保留檔案管理、垃圾桶與雙播放引擎、自訂播放控制、真正的前／後一幀、毫秒時間、雙指 1–8 倍縮放、放大拖曳與雙擊重置。逐幀先暫停，再由引擎選擇相鄰畫格，不使用 `1 / 平均 fps` 的時間跳轉冒充逐幀。
 
 系統引擎使用 `AVPlayerItem.step(byCount:)` 並檢查 `canStepForward`／`canStepBackward`。VLC 使用 `gotoNextFrame`／`gotoPreviousFrame`，等待其結果回呼；某來源不支援反向逐幀時會明確顯示訊息。VLC 優先選擇 VideoToolbox 解碼器並允許其他解碼器回退；系統引擎由 AVFoundation 選擇可用的硬體路徑。介面「硬體優先」描述選擇策略，不宣稱每個檔案目前都在硬體解碼。
 
 縮放由 UIScrollView 直接變換 AVPlayerLayer／VLC 顯示層，不反覆產生放大點陣圖；旋轉螢幕時重設為 1 倍。iOS Simulator 整合測試會產生 CFR／VFR H.264 樣本，核對系統逐幀的相鄰時間戳、VLC 前後逐幀回呼，以及 8 倍顯示層縮放、拖曳與旋轉重置。實際雙指操作、硬體解碼、耗電、HDR 與每種來源的幀行為仍需 iPhone 實測。
 
-FFmpeg 下載、多平台解析與背景處理尚未整合。個別容器／編碼、字幕、HDR 和音軌行為仍需 iPhone 實測；成功編譯不代表所有影片都能播放。
+FFmpeg 在免費完整版 a-Shell 中執行，下載時須保持 a-Shell 在前景。未內嵌 FFmpeg 或背景服務，不承諾 iOS 終止後繼續執行。CI 以真實 FFmpeg 和本地 HTTP 樣本測試影音分軌合併、HLS、音訊下載及錯誤處理；四平台的真機下載、書籤權限與 WebKit 行為仍待 iPhone 實測。個別容器／編碼、字幕、HDR 和音軌行為也需實測。
 
 檔案副本與還原遇到同名檔案會自動編號，重新命名則遇到重名就拒絕。垃圾桶不會自動清空，內容仍佔用手機空間。使用 Swift Testing 測試路徑邊界、符號連結、資料夾循環、中文與空白檔名及同名檔案保存；CI 先跑 `swift test --parallel` 再編譯 iOS。
 
@@ -35,9 +37,9 @@ Artifacts 僅保留一天，以控制儲存量；需要時可重新編譯。GitH
 
 1. 免費雲端編譯、Windows 簽署與 iPhone 更新驗證。
 2. 擴充檔案管理與 VLCKit 格式支援。
-3. App 內 FFmpeg：HTTPS／HLS 下載、分離影音合併、轉封裝。
-4. a-Shell 任務交接與平台解析環境驗證。
-5. YouTube、Instagram、Threads、Bilibili 逐站實測。
+3. a-Shell FFmpeg：HTTPS／HLS 下載、分離影音合併、原編碼封裝。
+4. a-Shell 任務交接與 YouTube／Instagram／Threads／Bilibili 解析已接入；等待真機逐站回饋。
+5. 根據手機回饋修正來源解析、登入與中斷恢復。
 6. 背景工作、中斷恢復、字幕與播放體驗。
 
 請勿提交登入資料、Cookie、私人下載來源或個人媒體檔案。

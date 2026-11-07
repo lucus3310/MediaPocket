@@ -10,7 +10,7 @@ struct LibraryItem: Identifiable, Sendable {
     var id: String { relativePath }
     var name: String { url.lastPathComponent }
     var isMedia: Bool {
-        let extensions = ["mp4", "mkv", "avi", "webm", "flv", "wmv", "ts", "m2ts", "mov", "m4v", "mpg", "mpeg", "3gp", "mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "aiff", "ac3", "dts"]
+        let extensions = ["mp4", "mkv", "mka", "avi", "webm", "flv", "wmv", "ts", "m2ts", "mov", "m4v", "mpg", "mpeg", "3gp", "mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "aiff", "ac3", "dts"]
         return !isDirectory && extensions.contains(url.pathExtension.lowercased())
     }
 }
@@ -90,6 +90,37 @@ actor MediaLibrary {
         try validName(name)
         let destination = availableDestination(name: name, in: try location(path))
         try files.createDirectory(at: destination, withIntermediateDirectories: false)
+    }
+
+    // Commit a whole verified job in one rename. A receipt makes recovery after
+    // an app interruption idempotent, without overwriting a user's folder.
+    func acceptDownload(from source: URL, id: UUID, outputs: [String]) throws -> String {
+        try prepare()
+        let path = "Downloads/\(id.uuidString)"
+        let parent = try location("Downloads")
+        try files.createDirectory(at: parent, withIntermediateDirectories: true)
+        let target = try location(path)
+        let receiptName = ".mediapocket-receipt"
+        if files.fileExists(atPath: target.path(percentEncoded: false)) {
+            guard (try? String(contentsOf: target.appending(path: receiptName), encoding: .utf8)) == id.uuidString else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            return path
+        }
+        guard !outputs.isEmpty, outputs.count <= 20, Set(outputs).count == outputs.count,
+              try source.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw DownloadError.invalidResult
+        }
+        let entries = try files.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
+        guard Set(entries.map(\.lastPathComponent)).subtracting([receiptName]) == Set(outputs) else { throw DownloadError.invalidResult }
+        for name in outputs {
+            guard name.range(of: #"^[0-9]{3}\.(?:mkv|mka)$"#, options: .regularExpression) != nil else { throw DownloadError.invalidResult }
+            let values = try source.appending(path: name).resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else { throw DownloadError.invalidResult }
+        }
+        try Data(id.uuidString.utf8).write(to: source.appending(path: receiptName), options: .atomic)
+        try files.moveItem(at: source, to: target)
+        return path
     }
 
     func rename(_ path: String, to name: String) throws {

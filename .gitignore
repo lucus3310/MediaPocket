@@ -16,6 +16,8 @@ DerivedData/
 cookies*.txt
 cookies*.json
 credentials*.json
+__pycache__/
+**/cookies/
 skills-installation.json
 docs/research/
 .codex/

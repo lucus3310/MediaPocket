@@ -45,6 +45,16 @@ jobs:
           HOMEBREW_NO_ANALYTICS: "1"
         run: command -v xcodegen >/dev/null || brew install xcodegen
 
+      - name: Test FFmpeg download bridge with local HTTP fixtures
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          python3 -m venv build/download-test-env
+          build/download-test-env/bin/pip install yt-dlp==2026.10.26 yt-dlp-ejs==0.8.0 yt-dlp-apple-webkit-jsi==0.1.1 yt-dlp-threads==0.1.0
+          build/download-test-env/bin/python scripts/test-downloads.py --require-ffmpeg
+
       - name: Compile Simulator and iPhone builds and package IPA
         run: bash scripts/build-ios.sh
 

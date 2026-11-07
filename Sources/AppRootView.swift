@@ -1,11 +1,19 @@
 import SwiftUI
 
 struct RootView: View {
-    @State private var library = MediaLibrary()
+    @State private var library: MediaLibrary
+    @State private var downloads: DownloadCenterModel
+    @State private var selectedTab = 0
+
+    init() {
+        let library = MediaLibrary()
+        _library = State(initialValue: library)
+        _downloads = State(initialValue: DownloadCenterModel(store: DownloadStore(library: library)))
+    }
 
     var body: some View {
-        TabView {
-            Tab("檔案庫", systemImage: "folder") {
+        TabView(selection: $selectedTab) {
+            Tab("檔案庫", systemImage: "folder", value: 0) {
                 NavigationStack {
                     LibraryFolderView(library: library, path: "")
                         .navigationDestination(for: String.self) { path in
@@ -13,16 +21,22 @@ struct RootView: View {
                         }
                 }
             }
-            Tab("下載", systemImage: "arrow.down.circle") {
+            Tab("下載", systemImage: "arrow.down.circle", value: 1) {
                 NavigationStack {
-                    ContentUnavailableView(
-                        "下載功能準備中", systemImage: "arrow.down.circle",
-                        description: Text("這個版本擴充檔案管理與多格式播放。FFmpeg 與平台下載將接著加入。")
-                    ).navigationTitle("下載")
+                    DownloadCenterView(model: downloads)
                 }
             }
-            Tab("設定", systemImage: "gearshape") { SettingsView() }
+            Tab("設定", systemImage: "gearshape", value: 2) { SettingsView() }
         }.tint(.indigo)
+            .onOpenURL { url in
+                guard url.scheme == "mediapocket" else { return }
+                selectedTab = 1
+                if url.host == "download",
+                   let source = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value {
+                    downloads.link = source
+                }
+                Task { await downloads.refresh() }
+            }
     }
 }
 
