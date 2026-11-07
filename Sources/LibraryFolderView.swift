@@ -43,7 +43,7 @@ struct LibraryFolderView: View {
                 ContentUnavailableView(
                     search.isEmpty ? "加入你的檔案" : "找不到符合的檔案",
                     systemImage: search.isEmpty ? "folder.badge.plus" : "magnifyingglass",
-                    description: Text(search.isEmpty ? "使用右上角的加號匯入檔案或建立資料夾。" : "試試其他名稱。")
+                    description: Text(search.isEmpty ? "這裡保存下載成品與複製的檔案。要從原位置開啟，請返回來源清單。" : "試試其他名稱。")
                 )
             }
             ForEach(visible) { item in
@@ -72,7 +72,7 @@ struct LibraryFolderView: View {
                 }
             }
         }
-        .navigationTitle(path.isEmpty ? "檔案庫" : (path as NSString).lastPathComponent)
+        .navigationTitle(path.isEmpty ? "App 內檔案" : (path as NSString).lastPathComponent)
         .searchable(text: $search, prompt: "搜尋此資料夾")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -83,7 +83,7 @@ struct LibraryFolderView: View {
                     Button("垃圾桶", systemImage: "trash") { showTrash = true }
                 } label: { Label("顯示選項", systemImage: "ellipsis.circle") }
                 Menu {
-                    Button("匯入檔案", systemImage: "square.and.arrow.down") { importer = true }
+                    Button("複製檔案到 App（另存副本）", systemImage: "doc.on.doc") { importer = true }
                     Button("新增資料夾", systemImage: "folder.badge.plus") { folderName = ""; newFolder = true }
                 } label: { Label("新增", systemImage: "plus") }
                 .disabled(busy)

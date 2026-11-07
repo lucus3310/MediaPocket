@@ -13,6 +13,7 @@ func configurePlaybackAudio() throws {
 @Observable
 final class SystemPlaybackSession {
     @ObservationIgnored let player = AVPlayer()
+    @ObservationIgnored private var sourceAccess: ScopedFileAccess?
     private(set) var position = 0.0
     private(set) var seconds = 0.0
     private(set) var duration = 0.0
@@ -34,6 +35,7 @@ final class SystemPlaybackSession {
         stopped = false
         resumeKey = "resumeSeconds:\(item.relativePath)"
         do {
+            if let root = item.accessRoot { sourceAccess = try ScopedFileAccess(url: root) }
             let asset = AVURLAsset(url: item.url)
             guard try await asset.load(.isPlayable) else {
                 unsupported = true
@@ -52,7 +54,10 @@ final class SystemPlaybackSession {
             guard !Task.isCancelled, !stopped else { return }
             if autoplay { player.play() }
             refresh()
-        } catch { if !Task.isCancelled, !stopped { errorMessage = error.localizedDescription } }
+        } catch {
+            sourceAccess?.close(); sourceAccess = nil
+            if !Task.isCancelled, !stopped { errorMessage = error.localizedDescription }
+        }
     }
 
     func refresh() {
@@ -155,6 +160,7 @@ final class SystemPlaybackSession {
         player.pause()
         restoreAudioTracks()
         player.replaceCurrentItem(with: nil)
+        sourceAccess?.close(); sourceAccess = nil
         ready = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -181,6 +187,7 @@ final class VLCPlaybackSession {
     // fallback for codecs or devices without a usable hardware decoder.
     @ObservationIgnored let player = VLCMediaPlayer(options: ["--codec=videotoolbox,any"])
     @ObservationIgnored private var frameDelegate: VLCFrameDelegate?
+    @ObservationIgnored private var sourceAccess: ScopedFileAccess?
     private(set) var position = 0.0
     private(set) var seconds = 0.0
     private(set) var duration = 0.0
@@ -201,6 +208,7 @@ final class VLCPlaybackSession {
     func start(_ item: LibraryItem, resume: Bool = true) {
         guard !started else { return }
         do {
+            let access = try item.accessRoot.map { try ScopedFileAccess(url: $0) }
             try configurePlaybackAudio()
             guard let media = VLCMedia(url: item.url) else { errorMessage = "無法開啟這個檔案。"; return }
             resumeKey = "resumeSeconds:\(item.relativePath)"
@@ -215,6 +223,7 @@ final class VLCPlaybackSession {
             }
             player.delegate = frameDelegate
             player.media = media
+            sourceAccess = access
             started = true
             player.play()
         } catch { errorMessage = error.localizedDescription }
@@ -328,6 +337,7 @@ final class VLCPlaybackSession {
         player.delegate = nil
         frameDelegate = nil
         player.stop()
+        sourceAccess?.close(); sourceAccess = nil
         ready = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

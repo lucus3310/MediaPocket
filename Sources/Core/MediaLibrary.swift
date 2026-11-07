@@ -6,6 +6,7 @@ struct LibraryItem: Identifiable, Sendable {
     let isDirectory: Bool
     let size: Int64
     let modified: Date
+    var accessRoot: URL? = nil
 
     var id: String { relativePath }
     var name: String { url.lastPathComponent }

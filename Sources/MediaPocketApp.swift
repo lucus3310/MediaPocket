@@ -4,7 +4,11 @@ import SwiftUI
 struct MediaPocketApp: App {
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView().task {
+                #if DEBUG
+                await SourceRestorationProbe.runIfRequested()
+                #endif
+            }
         }
     }
 }

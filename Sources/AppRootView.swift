@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @State private var library: MediaLibrary
     @State private var downloads: DownloadCenterModel
+    @State private var sources = SourceLibraryModel()
     @State private var selectedTab = 0
 
     init() {
@@ -15,11 +16,15 @@ struct RootView: View {
         TabView(selection: $selectedTab) {
             Tab("檔案庫", systemImage: "folder", value: 0) {
                 NavigationStack {
-                    LibraryFolderView(library: library, path: "")
+                    SourceLibraryView(library: library, model: sources)
                         .navigationDestination(for: String.self) { path in
                             LibraryFolderView(library: library, path: path)
                         }
+                        .navigationDestination(for: SourceLocation.self) { location in
+                            LinkedFolderView(model: sources, location: location)
+                        }
                 }
+                .modifier(SourcePresentations(model: sources))
             }
             Tab("下載", systemImage: "arrow.down.circle", value: 1) {
                 NavigationStack {
@@ -57,7 +62,9 @@ private struct SettingsView: View {
                     TextField("記下這次試用心得", text: $installationNote, axis: .vertical)
                 } header: { Text("試用備註") }
                   footer: { Text("沿用相同 Bundle ID 覆蓋安裝。更新前請保留重要媒體的備份。") }
-                Section("檔案位置") {
+                Section("儲存與來源") {
+                    Text("預設從原位置開啟，只記住已授權的檔案／資料夾，不另外複製影片。來源失效時可重新授權。")
+                    Text("App 內檔案保存下載成品與先前匯入的副本：")
                     Text("檔案 → 我的 iPhone → MediaPocket → Media")
                     Text("刪除項目會移入 App 的垃圾桶，可由檔案庫右上角選單還原。")
                         .foregroundStyle(.secondary)

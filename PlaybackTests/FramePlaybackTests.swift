@@ -69,6 +69,59 @@ private func makeClip(variable: Bool) async throws -> (URL, [Double]) {
 @Suite(.serialized)
 @MainActor
 struct FramePlaybackTests {
+    @Test("Original-file bookmarks play on both engines and leave only a small catalog")
+    func linkedOriginalPlayback() async throws {
+        let files = FileManager.default
+        let (created, _) = try await makeClip(variable: false)
+        let folder = SourceRestorationProbe.fixtureDirectory
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        let original = folder.appending(path: "clip.mov")
+        if files.fileExists(atPath: original.path(percentEncoded: false)) { try files.removeItem(at: original) }
+        try files.moveItem(at: created, to: original)
+        let bytes = try Data(contentsOf: original)
+        if files.fileExists(atPath: SourceRestorationProbe.resultURL.path(percentEncoded: false)) {
+            try files.removeItem(at: SourceRestorationProbe.resultURL)
+        }
+        let store = LinkedSourceStore(directory: SourceRestorationProbe.catalogDirectory)
+        let file = try await store.add(original)
+        let directory = try await store.add(folder)
+        let restored = LinkedSourceStore(directory: SourceRestorationProbe.catalogDirectory)
+        #expect(try await restored.sources().count == 2)
+        let window = try playbackWindow()
+        let controller = UIViewController()
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+
+        let direct = try await restored.prepareOpen(SourceLocation(sourceID: file.id, path: ""))
+        #expect(direct.url.resolvingSymlinksInPath() == original.resolvingSymlinksInPath() && direct.accessRoot != nil)
+        let native = SystemPlaybackSession()
+        let canvas = SystemVideoCanvas(player: native.player)
+        canvas.frame = window.bounds; controller.view.addSubview(canvas)
+        await native.prepare(direct, autoplay: false, resume: false)
+        try await waitFor { native.refresh(); return native.ready }
+        let nativeStep = await native.stepFrame(1)
+        #expect(nativeStep)
+        native.stop(); canvas.removeFromSuperview()
+
+        let nested = try await restored.prepareOpen(SourceLocation(sourceID: directory.id, path: "clip.mov"))
+        #expect(nested.url.resolvingSymlinksInPath() == original.resolvingSymlinksInPath() && nested.accessRoot != nil)
+        let vlc = VLCPlaybackSession()
+        let vlcCanvas = UIView(frame: window.bounds)
+        controller.view.addSubview(vlcCanvas); vlc.player.drawable = vlcCanvas
+        vlc.start(nested, resume: false)
+        defer { vlc.stop(); vlc.player.drawable = nil }
+        try await waitFor { vlc.refresh(); return vlc.ready && vlc.player.hasVideoOut }
+        let vlcStep = await vlc.stepFrame(1)
+        #expect(vlcStep)
+        vlc.stop()
+        #expect(try Data(contentsOf: original) == bytes)
+        let catalogBytes = try Data(contentsOf: SourceRestorationProbe.catalogDirectory.appending(path: "sources.json")).count
+        #expect(catalogBytes < 64 * 1024)
+        let manifest = SourceRestorationProbe.Manifest(fileID: file.id, folderID: directory.id,
+            originalURL: original, prefix: Data(bytes.prefix(32)), originalSize: Int64(bytes.count))
+        try JSONEncoder().encode(manifest).write(to: SourceRestorationProbe.manifestURL, options: .atomic)
+    }
+
     @Test("Native frame steps follow actual CFR and VFR timestamps", arguments: [false, true])
     func nativeSamples(variable: Bool) async throws {
         let (url, times) = try await makeClip(variable: variable)

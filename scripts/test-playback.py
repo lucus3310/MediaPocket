@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import subprocess
 import shutil
+import os
+import time
 
 
 def run(*args, **kwargs):
@@ -37,3 +39,19 @@ container = Path(run('xcrun', 'simctl', 'get_app_container', identifier,
                      'io.github.lucus3310.MediaPocket', 'data', capture_output=True, text=True).stdout.strip())
 for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png']:
     shutil.copyfile(container / 'Documents/InterfaceReview' / name, Path('build/artifacts') / name)
+
+# Relaunch the actual app process; recreating a Swift store alone does not
+# exercise URL bookmark resolution after the process has been terminated.
+subprocess.run(['xcrun', 'simctl', 'terminate', identifier, 'io.github.lucus3310.MediaPocket'], capture_output=True, check=False)
+environment = dict(os.environ, SIMCTL_CHILD_MEDIAPOCKET_SOURCE_PROBE='1')
+run('xcrun', 'simctl', 'launch', identifier, 'io.github.lucus3310.MediaPocket', env=environment)
+probe = container / 'Documents/SourceColdLaunchResult.json'
+deadline = time.monotonic() + 45
+while not probe.exists() and time.monotonic() < deadline:
+    time.sleep(0.2)
+report = json.loads(probe.read_text())
+if not report.get('passed'):
+    raise RuntimeError(f'Cold-launch source restoration failed: {report}')
+shutil.copyfile(probe, Path('build/artifacts/source-restoration-tests.json'))
+time.sleep(1)
+run('xcrun', 'simctl', 'io', identifier, 'screenshot', 'build/artifacts/SourceLibrary-home.png')
