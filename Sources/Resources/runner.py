@@ -65,11 +65,39 @@ class Runtime:
         if os.name != "posix":
             return
         try:
-            self.native = ctypes.CDLL(None).ios_system
+            library = ctypes.CDLL(None)
+            self.native = library.ios_system
             self.native.argtypes = [ctypes.c_char_p]
             self.native.restype = ctypes.c_int
         except (AttributeError, OSError):
-            self.native = None
+            return
+        # a-Shell disables joinMainThread for its UI. Nested ios_system calls
+        # can therefore return before FFmpeg finishes. Match the official
+        # ios_fork -> ios_system -> ios_full_waitpid lifecycle, including status.
+        self.fork = library.ios_fork
+        self.fork.argtypes = []
+        self.fork.restype = ctypes.c_int
+        self.wait_full = library.ios_full_waitpid
+        self.wait_full.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        self.wait_full.restype = ctypes.c_int
+        self.release = library.ios_releaseThreadId
+        self.release.argtypes = [ctypes.c_int]
+        self.release.restype = None
+
+    def call_native(self, command):
+        pid = self.fork()
+        if pid <= 0:
+            raise RuntimeError("a-Shell 無法配置原生指令執行緒，請關閉其他任務後重試。")
+        try:
+            immediate = self.native(command.encode("utf-8"))
+            status = ctypes.c_int(0)
+            if self.wait_full(pid, ctypes.byref(status), 0) < 0:
+                raise RuntimeError("a-Shell 未能等待 FFmpeg 結束，未匯入輸出。")
+            # waitpid status uses POSIX encoding, including termination signals.
+            code = (status.value >> 8) & 255 if not (status.value & 127) else 128 + (status.value & 127)
+            return code or immediate
+        finally:
+            self.release(pid)
 
     def run(self, arguments, stdout, stderr):
         # Never interpolate a URL into an unquoted shell command. Only the native
@@ -77,7 +105,7 @@ class Runtime:
         if self.native:
             command = shlex.join([str(arg) for arg in arguments])
             command += " > " + shlex.quote(str(stdout)) + " 2> " + shlex.quote(str(stderr))
-            return self.native(command.encode("utf-8"))
+            return self.call_native(command)
         with open(stdout, "wb") as out, open(stderr, "wb") as err:
             return subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                   timeout=3600, check=False).returncode
@@ -88,7 +116,7 @@ class Runtime:
         callback = "mediapocket://complete"
         if job_id:
             callback += "?id=" + quote(job_id) + "&token=" + quote(token or "")
-        self.native(("openurl " + shlex.quote(callback)).encode("utf-8"))
+        self.call_native("openurl " + shlex.quote(callback))
 
 
 def setup(bridge, runtime):

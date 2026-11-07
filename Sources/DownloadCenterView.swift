@@ -160,11 +160,11 @@ private struct DownloadSetupView: View {
                 Section("一次設定，完全免費") {
                     Link("安裝免費完整版 a-Shell", destination: URL(string: "https://apps.apple.com/app/a-shell/id1473805438")!)
                     Button("1. 授權下載交接資料夾") {
-                        Task { await model.launch("deletemark MediaPocketBridge; pickFolder") }
+                        Task { await model.launch("deletemark MediaPocketBridge\npickFolder") }
                     }
                     Text("在選擇器中選「瀏覽 → 我的 iPhone → MediaPocket → MediaPocketBridge」，進入後按開啟。請選這個子資料夾，書籤名稱才會是 MediaPocketBridge。這個步驟也會重設舊的同名書籤。")
                     Button("2. 安裝／更新解析元件並檢查 FFmpeg") {
-                        Task { await model.launch("jump MediaPocketBridge; python3 runner.py --setup") }
+                        Task { await model.launch("jump MediaPocketBridge\npython3 runner.py --setup") }
                     }
                     Text("允許下載免費 Python 套件。看到檢查完成後返回本 App；若書籤失效，重新執行步驟 1。")
                 }

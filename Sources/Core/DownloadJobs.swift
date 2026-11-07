@@ -159,7 +159,8 @@ actor DownloadStore {
     }
 
     static func command(for id: UUID) -> String {
-        "jump MediaPocketBridge; python3 runner.py --job \(id.uuidString)"
+        // a-Shell's URL entry point splits commands on newlines, not semicolons.
+        "jump MediaPocketBridge\npython3 runner.py --job \(id.uuidString)"
     }
 
     private func jobDirectory(_ id: UUID) -> URL {

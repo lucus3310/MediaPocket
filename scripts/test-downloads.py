@@ -74,9 +74,26 @@ class Contracts(unittest.TestCase):
         runtime = runner.Runtime()
         captured = []
         runtime.native = lambda command: captured.append(command.decode()) or 0
+        runtime.fork = lambda: 7
+        runtime.wait_full = lambda pid, status, options: pid
+        runtime.release = lambda pid: None
         url = "https://cdn.test/file?x=';echo SECRET&y=1"
         runtime.run(["ffmpeg", "-i", url, "a file.mkv"], "stdout file", "stderr file")
         self.assertEqual(shlex.split(captured[0]), ["ffmpeg", "-i", url, "a file.mkv", ">", "stdout file", "2>", "stderr file"])
+
+    def test_native_runtime_waits_and_returns_child_exit_status(self):
+        runtime = runner.Runtime()
+        events = []
+        runtime.fork = lambda: events.append("fork") or 7
+        runtime.native = lambda command: events.append("dispatch") or 0
+        def wait(pid, status, options):
+            events.append("wait")
+            status._obj.value = 37 << 8
+            return pid
+        runtime.wait_full = wait
+        runtime.release = lambda pid: events.append("release")
+        self.assertEqual(runtime.call_native("ffmpeg -version"), 37)
+        self.assertEqual(events, ["fork", "dispatch", "wait", "release"])
 
     def test_threads_selects_target_and_refuses_ambiguous_share(self):
         from yt_dlp import YoutubeDL

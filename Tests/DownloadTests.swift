@@ -38,6 +38,8 @@ func persistedRequest() async throws {
     let command = DownloadStore.command(for: request.id)
     #expect(!command.contains("secret"))
     #expect(command.hasSuffix(request.id.uuidString))
+    #expect(command.split(separator: "\n").count == 2)
+    #expect(!command.contains(";"))
     #expect(DownloadStore.shellURL(command: command)?.absoluteString.contains(" ") == false)
     let jobs = try await store.jobs()
     #expect(jobs.count == 1)
