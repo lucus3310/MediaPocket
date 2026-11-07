@@ -27,6 +27,8 @@ spec.loader.exec_module(runner)
 class Contracts(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "Apple WebKit provider requires Darwin")
     def test_apple_provider_import_contract(self):
+        from yt_dlp.plugins import load_all_plugins
+        load_all_plugins()
         import yt_dlp_ejs
         from yt_dlp_plugins.extractor.ytjsc import AppleWebKitJCP
         self.assertEqual(AppleWebKitJCP.PROVIDER_VERSION, "0.1.1")
@@ -83,12 +85,16 @@ class Contracts(unittest.TestCase):
         recommended = dict(target, code="Other", video_versions=[{"url": "https://cdn.test/WRONG.mp4"}])
         page = '<script type="application/json">' + json.dumps([recommended, target]) + '</script>'
         adapter = runner.strict_threads_extractor()
-        with YoutubeDL({"quiet": True}) as ydl:
-            adapter.set_downloader(ydl)
+        with YoutubeDL({"quiet": True, "format": runner.format_selector("1080", False)}) as ydl:
+            ydl.add_info_extractor(adapter)
             with patch.object(adapter, "_download_webpage", return_value=page):
                 result = adapter._real_extract("https://www.threads.com/@u/post/Target")
                 self.assertEqual(result["id"], "Target")
                 self.assertTrue(all("WRONG" not in item["url"] for item in result["formats"]))
+                processed = ydl.extract_info("https://www.threads.com/@u/post/Target", download=False, ie_key=adapter.ie_key())
+                selected = runner.inputs_for(processed, ydl, False)
+                self.assertEqual(selected[0][1], "https://cdn.test/target.mp4")
+                self.assertEqual(selected[0][2]["Referer"], "https://www.threads.com/")
                 with self.assertRaises(Exception):
                     adapter._real_extract("https://www.threads.com/@u/post/Missing")
                 with self.assertRaises(Exception):

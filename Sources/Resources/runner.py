@@ -103,8 +103,11 @@ def setup(bridge, runtime):
         if result:
             raise ValueError("Python 套件安裝未完成，請檢查 a-Shell 終端訊息與網路後重試。")
         importlib.invalidate_caches()
+        from yt_dlp.plugins import load_all_plugins
+        load_all_plugins()
         for module in ("yt_dlp", "yt_dlp_ejs", "yt_dlp_plugins.extractor.threads", "yt_dlp_plugins.extractor.webkit_jsi"):
             importlib.import_module(module)
+        importlib.import_module("yt_dlp_plugins.extractor.ytjsc")
         for command in ("ffmpeg", "ffprobe"):
             if runtime.run([command, "-version"], bridge / (command + "-version.txt"), bridge / "setup-error.txt"):
                 raise ValueError(f"找不到可運作的 {command}，請更新完整版 a-Shell。")
