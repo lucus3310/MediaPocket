@@ -521,6 +521,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                                          slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
                     fallback = engine.software_fallback(request, entry, encoders, plan) if result and advanced else None
                     if fallback is not None:
+                        check_cancel()
                         temporary.unlink(missing_ok=True)
                         error_log = slot / "ffmpeg-error.txt"
                         if error_log.exists(): error_log.replace(slot / "ffmpeg-videotoolbox-error.txt")
