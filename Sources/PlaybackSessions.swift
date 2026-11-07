@@ -133,8 +133,8 @@ final class SystemPlaybackSession {
 private final class VLCFrameDelegate: NSObject, VLCMediaPlayerDelegate {
     let receive: @Sendable (Int) -> Void
     init(receive: @escaping @Sendable (Int) -> Void) { self.receive = receive }
-    func mediaPlayer(_ player: VLCMediaPlayer, nextFrameSteppedWithResult result: VLCMediaPlayerFrameStepResult) { receive(result.rawValue) }
-    func mediaPlayer(_ player: VLCMediaPlayer, previousFrameSteppedWithResult result: VLCMediaPlayerFrameStepResult) { receive(result.rawValue) }
+    func mediaPlayer(_ player: VLCMediaPlayer, nextFrameSteppedWith result: VLCMediaPlayerFrameStepResult) { receive(result.rawValue) }
+    func mediaPlayer(_ player: VLCMediaPlayer, previousFrameSteppedWith result: VLCMediaPlayerFrameStepResult) { receive(result.rawValue) }
 }
 
 @MainActor

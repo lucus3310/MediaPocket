@@ -8,6 +8,14 @@ import UIKit
 private enum PlaybackTestError: Error { case timeout, writer, pixelBuffer }
 
 @MainActor
+private func playbackWindow() throws -> UIWindow {
+    let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = UIWindow(windowScene: scene)
+    window.frame = scene.screen.bounds
+    return window
+}
+
+@MainActor
 private func waitFor(_ condition: @escaping @MainActor () -> Bool) async throws {
     for _ in 0..<500 {
         if condition() { return }
@@ -66,7 +74,7 @@ struct FramePlaybackTests {
         let (url, times) = try await makeClip(variable: variable)
         defer { try? FileManager.default.removeItem(at: url) }
         let session = SystemPlaybackSession()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let window = try playbackWindow()
         let controller = UIViewController()
         window.rootViewController = controller
         window.makeKeyAndVisible()
@@ -98,7 +106,7 @@ struct FramePlaybackTests {
         let (url, _) = try await makeClip(variable: false)
         defer { try? FileManager.default.removeItem(at: url) }
         let session = VLCPlaybackSession()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let window = try playbackWindow()
         let controller = UIViewController()
         window.rootViewController = controller
         window.makeKeyAndVisible()
