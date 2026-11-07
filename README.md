@@ -2,9 +2,13 @@
 
 以 SwiftUI 製作的個人 iPhone 影音工具。目標是整合本機檔案管理、多格式播放，以及透過 FFmpeg 處理平台影音下載。
 
-目前版本 **0.1.0 為安裝驗證版**：可從系統「檔案」選擇影片／音訊並複製到本機媒體庫，使用 AVPlayer 播放系統支援的媒體；「設定」內的備註可用來驗證更新後資料是否保留。
+目前版本 **0.2.0 為檔案管理與多格式播放試用版**：匯入一般檔案、建立資料夾、搜尋與排序、重新命名、移動、複製、分享，以及垃圾桶還原。影音可切換系統 AVPlayer 與 VideoLAN VLCKit，VLC 提供快轉、倍速與續播位置保存。
 
-FFmpeg、VLCKit、多平台下載與背景處理尚未整合。成功編譯不代表已通過 iPhone 實測。
+FFmpeg 下載、多平台解析與背景處理尚未整合。個別容器／編碼、字幕、HDR 和音軌行為仍需 iPhone 實測；成功編譯不代表所有影片都能播放。
+
+檔案副本與還原遇到同名檔案會自動編號，重新命名則遇到重名就拒絕。垃圾桶不會自動清空，內容仍佔用手機空間。使用 Swift Testing 測試路徑邊界、符號連結、資料夾循環、中文與空白檔名及同名檔案保存；CI 先跑 `swift test --parallel` 再編譯 iOS。
+
+VLCKit 固定到官方 revision `6629ecb91e7e05e6b3fcbf77b17d0421cff37923`，由該版本 Swift Package checksum 驗證官方二進位檔。授權全文放在 App「設定 → VideoLAN VLCKit 與授權」及 `Sources/Resources/VLCKit-COPYING.txt`。可由 [VideoLAN 原始碼與建置流程](https://github.com/videolan/vlckit/tree/6629ecb91e7e05e6b3fcbf77b17d0421cff37923) 取得來源並重建套件，替換 `project.yml` 中的 dependency 後重編 MediaPocket。
 
 ## 免費編譯
 

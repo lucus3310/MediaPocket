@@ -8,9 +8,13 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+packages:
+  VLCKit:
+    url: https://github.com/videolan/vlckit.git
+    revision: 6629ecb91e7e05e6b3fcbf77b17d0421cff37923
 targets:
   MediaPocket:
     type: application
@@ -19,6 +23,9 @@ targets:
       - path: Sources
         excludes:
           - Info.plist
+    dependencies:
+      - package: VLCKit
+        product: VLCKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.lucus3310.MediaPocket

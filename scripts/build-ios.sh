@@ -9,6 +9,7 @@ fi
 
 xcodebuild -version
 xcodebuild -showsdks
+swift test --parallel
 xcodegen generate --spec project.yml
 
 # Use the same source settings for Simulator and iPhone, with no Apple account

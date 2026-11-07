@@ -7,6 +7,8 @@ on:
       - Sources/**
       - scripts/**
       - project.yml
+      - Package.swift
+      - Tests/**
       - .github/workflows/ios-build.yml
   workflow_dispatch:
 
@@ -21,7 +23,7 @@ jobs:
   build:
     # This is a STANDARD public-repository runner, not a paid larger runner.
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Require a public repository for the zero-cost build
         env:
