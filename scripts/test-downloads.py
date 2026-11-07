@@ -20,6 +20,7 @@ import uuid
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "Sources/Resources"))
 spec = importlib.util.spec_from_file_location("runner", ROOT / "Sources/Resources/runner.py")
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
@@ -70,7 +71,9 @@ class Contracts(unittest.TestCase):
 
     def test_routes_and_injection(self):
         valid = [("https://youtu.be/abc", "youtube"), ("https://www.instagram.com/reel/abc/", "instagram"),
-                 ("https://www.threads.com/@u/post/Abc", "threads"), ("https://b23.tv/abc", "bilibili")]
+                 ("https://www.threads.com/@u/post/Abc", "threads"), ("https://b23.tv/abc", "bilibili"),
+                 ("https://www.tiktok.com/@u/video/123456", "tiktok"), ("https://vt.tiktok.com/abc/", "tiktok"),
+                 ("https://x.com/u/status/123456", "x"), ("https://vimeo.com/123456", "vimeo"), ("https://dai.ly/abc", "dailymotion")]
         for url, platform in valid:
             self.assertEqual(runner.platform_for(url), platform)
         for url in ["https://youtube.com.evil.test/watch?v=abc", "file:///etc/passwd", "https://www.youtube.com/playlist?list=x"]:
@@ -165,7 +168,7 @@ class QualityCatalogTests(unittest.TestCase):
     def test_catalog_contains_actual_common_qualities_without_source_urls(self):
         entries = [self.entry(), self.entry("two", (720,))]
         catalog = runner.quality_catalog(entries, "token")
-        self.assertEqual([option["id"] for option in catalog["options"]], ["video:best", "video:720", "audio:best"])
+        self.assertEqual([option["id"] for option in catalog["options"] if not option["id"].startswith(("v:", "a:"))], ["video:best", "video:720", "audio:best"])
         self.assertNotIn("PRIVATE", json.dumps(catalog))
         self.assertNotIn("https://", json.dumps(catalog))
         chosen = runner.apply_selection(entries, catalog, "video:720")
@@ -191,12 +194,59 @@ class QualityCatalogTests(unittest.TestCase):
         selected = runner.apply_selection([self.entry()], runner.quality_catalog([self.entry()], "token"), "audio:best")
         self.assertEqual(selected[0]["requested_formats"][0]["vcodec"], "none")
 
+    def test_4k_8k_fps_codec_and_hdr_selection_is_exact(self):
+        entry = self.entry(heights=())
+        entry["formats"] = [fmt for fmt in entry["formats"] if fmt.get("format_id") == "audio"]
+        entry["formats"] += [
+            {"format_id": "vp9-60", "height": 2160, "width": 3840, "fps": 60, "vcodec": "vp09", "acodec": "none", "ext": "webm", "url": "https://cdn.test/4k60"},
+            {"format_id": "av1-30", "height": 2160, "width": 3840, "fps": 30, "vcodec": "av01", "acodec": "none", "ext": "mp4", "url": "https://cdn.test/4k30"},
+            {"format_id": "8k", "height": 4320, "width": 7680, "fps": 60, "vcodec": "av01", "acodec": "none", "ext": "mp4", "dynamic_range": "HDR10", "url": "https://cdn.test/8k"}]
+        catalog = runner.quality_catalog([entry], "token")
+        option = next(option for option in catalog["options"] if option.get("fps") == 60 and option.get("videoCodec") == "vp9")
+        selected = runner.apply_selection([entry], catalog, option["id"])[0]
+        self.assertEqual(selected["requested_formats"][0]["format_id"], "vp9-60")
+        eight = next(option for option in catalog["options"] if option.get("dynamicRange") == "HDR10")
+        self.assertEqual(eight["height"], 4320)
+        changed = dict(entry, formats=[fmt for fmt in entry["formats"] if fmt.get("format_id") != "vp9-60"])
+        with self.assertRaises(ValueError): runner.apply_selection([changed], catalog, option["id"])
+
+    def test_output_profiles_copy_transcode_and_hdr_guard(self):
+        entry = {"requested_formats": [{"height": 2160, "width": 3840, "fps": 60, "vcodec": "vp9", "acodec": "none"},
+                                       {"vcodec": "none", "acodec": "opus"}]}
+        request = {"audioOnly": False, "outputProfile": "auto"}
+        self.assertEqual(runner.engine.output_plan(request, entry, set())[0], "mkv")
+        plan = runner.engine.output_plan(dict(request, outputProfile="h264"), entry, {"h264_videotoolbox", "aac"})
+        self.assertEqual(plan[0], "mp4")
+        self.assertIn("h264_videotoolbox", plan[1])
+        self.assertNotIn("-vf", plan[1])
+        entry["requested_formats"][0]["dynamic_range"] = "HDR10"
+        with self.assertRaises(ValueError): runner.engine.output_plan(dict(request, outputProfile="h264"), entry, {"h264_videotoolbox", "aac"})
+        self.assertEqual(runner.engine.output_plan(dict(request, outputProfile="original"), entry, set())[1], ["-c", "copy"])
+        with self.assertRaises(ValueError): runner.engine.output_plan({"audioOnly": True, "outputProfile": "mp3"}, entry, set())
+
 
 class AuthorizedHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get("Cookie") != "session=local" or self.headers.get("Referer") != "https://www.bilibili.com/":
             self.send_error(403)
             return
+        if self.headers.get("Range", "").startswith("bytes="):
+            path = Path(self.translate_path(self.path))
+            if path.is_file():
+                start = int(self.headers["Range"].split("=")[1].split("-")[0])
+                size = path.stat().st_size
+                if 0 <= start < size:
+                    self.server.range_requests.append(start)
+                    self.send_response(206)
+                    self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+                    self.send_header("Content-Length", str(size - start))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    with path.open("rb") as stream:
+                        stream.seek(start)
+                        try: self.wfile.write(stream.read())
+                        except (ConnectionError, BrokenPipeError): pass
+                    return
         super().do_GET()
     def log_message(self, *_):
         pass
@@ -209,6 +259,7 @@ class FFmpegIntegration(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.runtime = runner.Runtime()
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(AuthorizedHandler, directory=str(self.base)))
+        self.server.range_requests = []
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"
@@ -321,6 +372,100 @@ class FFmpegIntegration(unittest.TestCase):
         runner.run_job(self.bridge, job_id, self.runtime, hls)
         self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "complete")
 
+    @contextlib.contextmanager
+    def advanced_extraction(self, request, bridge):
+        from yt_dlp import YoutubeDL
+        with self.extraction(request, bridge) as (legacy, entries), YoutubeDL({"quiet": True, "no_warnings": True, "logger": runner.QuietLog()}) as ydl:
+            ydl.cookiejar = legacy.cookiejar
+            entry = entries[0]
+            entry["id"] = "advanced-fixture"
+            entry["requested_formats"][0].update(format_id="video", vcodec="h264", width=160, height=90, fps=12, ext="mp4")
+            entry["requested_formats"][1].update(format_id="audio", vcodec="none", ext="m4a")
+            yield ydl, entries
+
+    def test_fast_transfer_profiles_and_cache_cleanup(self):
+        for profile, audio, suffix in [("auto", False, "mp4"), ("h264", False, "mp4"), ("m4a", True, "m4a"),
+                                       ("mp3", True, "mp3"), ("flac", True, "flac"), ("wav", True, "wav")]:
+            job_id, slot = self.request(audio)
+            request = json.loads((slot / "request.json").read_text())
+            request.update(transferMode="fast", outputProfile=profile, connections=4)
+            runner.atomic_json(slot / "request.json", request)
+            actual_encoders = runner.engine.encoder_set(self.runtime, slot)
+            # CI uses a deterministic software encoder; iOS chooses VideoToolbox.
+            actual_encoders.discard("h264_videotoolbox")
+            with patch.object(runner.engine, "encoder_set", return_value=actual_encoders):
+                runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
+            status = json.loads((slot / "status.json").read_text())
+            self.assertEqual(status["phase"], "complete", (profile, status))
+            output = slot / "output" / ("001." + suffix)
+            self.assertTrue(output.is_file())
+            streams = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(output)]))["streams"]
+            self.assertEqual({stream["codec_type"] for stream in streams}, {"audio"} if audio else {"video", "audio"})
+            self.assertFalse((slot / "tracks").exists())
+
+    def test_fast_native_hls_fragments(self):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(self.base / "video.mp4"), "-i", str(self.base / "audio.m4a"),
+                        "-c", "copy", "-f", "hls", "-hls_time", "0.5", "-hls_playlist_type", "vod", str(self.base / "fast.m3u8")], check=True)
+        @contextlib.contextmanager
+        def source(request, bridge):
+            with self.advanced_extraction(request, bridge) as (ydl, entries):
+                entries[0]["requested_formats"] = [{"url": self.url + "/fast.m3u8", "protocol": "m3u8_native", "vcodec": "h264", "acodec": "aac", "ext": "mp4"}]
+                yield ydl, entries
+        job_id, slot = self.request()
+        request = json.loads((slot / "request.json").read_text())
+        request.update(transferMode="fast", outputProfile="original", connections=4)
+        runner.atomic_json(slot / "request.json", request)
+        runner.run_job(self.bridge, job_id, self.runtime, source)
+        self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "complete")
+
+    def test_high_resolution_4k60_and_8k_copy(self):
+        for width, height, fps in ((3840, 2160, 60), (7680, 4320, 30)):
+            source_path = self.base / f"sample-{height}.mp4"
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", f"color=s={width}x{height}:r={fps}",
+                            "-frames:v", "2", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", str(source_path)], check=True)
+            @contextlib.contextmanager
+            def source(request, bridge):
+                with self.advanced_extraction(request, bridge) as (ydl, entries):
+                    entries[0]["requested_formats"] = [{"url": self.url + "/" + source_path.name, "protocol": "http", "format_id": str(height),
+                        "width": width, "height": height, "fps": fps, "vcodec": "h264", "acodec": "none", "ext": "mp4"}]
+                    yield ydl, entries
+            job_id, slot = self.request()
+            request = json.loads((slot / "request.json").read_text())
+            request.update(transferMode="fast", outputProfile="original", connections=4)
+            runner.atomic_json(slot / "request.json", request)
+            runner.run_job(self.bridge, job_id, self.runtime, source)
+            status = json.loads((slot / "status.json").read_text())
+            self.assertEqual(status["phase"], "complete", status)
+            data = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(slot / "output/001.mkv")]))
+            video = next(stream for stream in data["streams"] if stream["codec_type"] == "video")
+            self.assertEqual((video["width"], video["height"]), (width, height))
+            numerator, denominator = map(int, video["avg_frame_rate"].split("/"))
+            self.assertEqual(numerator / denominator, fps)
+
+    def test_interrupted_fast_download_resumes_http_range(self):
+        job_id, slot = self.request()
+        request = json.loads((slot / "request.json").read_text())
+        request.update(transferMode="fast", outputProfile="original", connections=4)
+        runner.atomic_json(slot / "request.json", request)
+        real_transfer = runner.engine.download_tracks
+        def interrupted(ydl, entry, cache, connections, update, check_cancel):
+            def on_progress(**values):
+                update(**values)
+                if values.get("progress", 0) and values["progress"] < 0.8:
+                    (slot / "cancel").touch()
+            return real_transfer(ydl, entry, cache, connections, on_progress, check_cancel)
+        with patch.object(runner.engine, "download_tracks", interrupted):
+            runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
+        self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "cancelled")
+        self.assertTrue(list((slot / "tracks").glob("*.part")))
+        (slot / "cancel").unlink()
+        request["attempt"] = 1
+        runner.atomic_json(slot / "request.json", request)
+        runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
+        status = json.loads((slot / "status.json").read_text())
+        self.assertEqual(status["phase"], "complete", status)
+        self.assertTrue(self.server.range_requests)
+
     def test_http_failure_never_publishes_outputs(self):
         @contextlib.contextmanager
         def rejected(request, bridge):
@@ -349,6 +494,8 @@ if __name__ == "__main__":
         "physicalIphone": False, "livePlatformDownloads": False,
         "checks": ["four platform URL routing", "strict Threads post matching", "HTTP auth headers",
                    "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion",
-                   "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection"]
+                   "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection",
+                   "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "HTTP Range resume",
+                   "MP4 H264 M4A MP3 FLAC WAV", "cache cleanup"]
     })
     raise SystemExit(not result.wasSuccessful())

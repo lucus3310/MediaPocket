@@ -22,8 +22,9 @@ import threading
 import time
 from urllib.parse import parse_qs, quote, urlparse
 import uuid
+import download_engine as engine
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -56,7 +57,12 @@ def platform_for(url):
         return "bilibili"
     if host in ("bilibili.com", "www.bilibili.com", "m.bilibili.com") and re.fullmatch(r"/video/(BV[A-Za-z0-9]+|av[0-9]+)/?", path):
         return "bilibili"
-    raise ValueError("請提供這四個平台的單一影片或貼文連結。")
+    if host in ("tiktok.com", "www.tiktok.com") and re.fullmatch(r"/(?:@[^/]+/video/\d+|t/[A-Za-z0-9_-]+)/?", path): return "tiktok"
+    if host in ("vm.tiktok.com", "vt.tiktok.com") and re.fullmatch(r"/[A-Za-z0-9_-]+/?", path): return "tiktok"
+    if host in ("x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com") and re.fullmatch(r"/[^/]+/status/\d+/?", path): return "x"
+    if host in ("vimeo.com", "www.vimeo.com", "player.vimeo.com") and re.fullmatch(r"/(?:video/)?\d+(?:/[A-Za-z0-9]+)?/?", path): return "vimeo"
+    if (host in ("dailymotion.com", "www.dailymotion.com") and re.fullmatch(r"/video/[A-Za-z0-9]+/?", path)) or (host == "dai.ly" and re.fullmatch(r"/[A-Za-z0-9]+/?", path)): return "dailymotion"
+    raise ValueError("請提供支援平台的單一影片或貼文連結。")
 
 
 class Runtime:
@@ -205,7 +211,7 @@ def extractor(request, bridge):
     print("[MediaPocket] yt-dlp 已啟動，正在解析 " + request["platform"] + "…", flush=True)
     cookie = bridge / "cookies" / (request["platform"] + ".txt")
     options = {
-        "format": format_selector(request["quality"], request["audioOnly"]),
+        "format": "bv*+ba/b/ba" if request.get("requiresSelection") else format_selector(request["quality"], request["audioOnly"]),
         "noplaylist": True, "playlistend": 20, "ignoreerrors": False,
         "quiet": True, "no_warnings": True, "logger": QuietLog(),
         "socket_timeout": 30, "retries": 3, "extractor_retries": 2,
@@ -275,6 +281,10 @@ def resolution(fmt):
 
 
 def quality_catalog(entries, token):
+    return engine.catalog(entries, token)
+
+
+def legacy_quality_catalog(entries, token):
     if not entries or len(entries) > 20 or any(entry.get("is_live") for entry in entries):
         raise ValueError("目前僅支援已結束的影片貼文，每則最多 20 段。")
     formats = [available_formats(entry) for entry in entries]
@@ -294,6 +304,8 @@ def quality_catalog(entries, token):
 
 
 def apply_selection(entries, catalog, selection):
+    if catalog.get("schema") == 2:
+        return engine.apply(entries, catalog, selection)
     if catalog.get("schema") != 1 or catalog.get("identities") != [str(entry.get("id", index)) for index, entry in enumerate(entries)]:
         raise ValueError("貼文內容已變更，請在 App 重新取得可用畫質。")
     option = next((item for item in catalog["options"] if item["id"] == selection), None)
@@ -398,6 +410,8 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         raise ValueError("任務資料與平台不一致。")
     if request["quality"] not in ("best", "1080", "720") or not isinstance(request["audioOnly"], bool):
         raise ValueError("畫質設定不正確。")
+    if request.get("connections", 4) not in (1, 2, 4, 8) or request.get("transferMode") not in (None, "fast"):
+        raise ValueError("下載模式設定不正確。")
     token = str(uuid.UUID(request["token"])).upper()
     if request.get("method") == "smgShortcut":
         raise ValueError("這是舊版外部交接紀錄，請在 App 重新解析連結。")
@@ -407,11 +421,12 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
     existing = slot / "status.json"
     if existing.exists():
         previous = json.loads(existing.read_text(encoding="utf-8"))
-        if previous.get("phase") in ("complete", "failed", "cancelled") and previous.get("token") == token:
+        if previous.get("phase") in ("complete", "failed", "cancelled") and previous.get("token") == token and (
+                previous.get("phase") == "complete" or request.get("attempt", 0) <= previous.get("attempt", 0)):
             print("這個任務已結束，請回 App 建立重試任務。")
             runtime.callback(job_id, token)
             return
-    status = {"phase": "extracting", "message": "正在解析影片連結…", "token": token, "updated": time.time()}
+    status = {"phase": "extracting", "message": "正在解析影片連結…", "token": token, "updated": time.time(), "attempt": request.get("attempt", 0)}
     status_lock = threading.Lock()
 
     def update(**values):
@@ -447,41 +462,62 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
             raise ValueError("輸出目錄不正確。")
         # Recover an interrupted attempt inside this uncommitted job only.
         for old in output_dir.iterdir():
-            if old.is_symlink() or not old.is_file() or not re.fullmatch(r"\d{3}\.(mkv|mka)(\.part)?", old.name):
+            if old.is_symlink() or not old.is_file() or not re.fullmatch(r"\d{3}\.(mkv|mka|mp4|webm|m4a|mp3|flac|wav)(\.part)?", old.name):
                 raise ValueError("任務輸出目錄含有非預期檔案，請建立新任務。")
             old.unlink()
         outputs = []
+        advanced = request.get("transferMode") == "fast" or request.get("outputProfile") not in (None, "original")
+        encoders = engine.encoder_set(runtime, slot) if advanced else set()
+        cache = slot / "tracks"
+        if advanced:
+            cache.mkdir(exist_ok=True)
+            if cache.is_symlink(): raise ValueError("暫存資料夾不正確。")
         with extraction(request, bridge) as (ydl, entries):
             if request.get("requiresSelection"):
                 catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
                 if catalog.get("token") != token:
                     raise ValueError("畫質清單不屬於此任務，請重新解析。")
                 entries = apply_selection(entries, catalog, request["selection"])
+            if advanced and request["audioOnly"]:
+                normalized = []
+                for entry in entries:
+                    track = engine.best_audio(entry.get("requested_formats") or [entry])
+                    if track is None: raise ValueError("來源沒有可下載的音訊。")
+                    normalized.append(dict(entry, requested_formats=[track]))
+                entries = normalized
+            plans = [engine.output_plan(request, entry, encoders) for entry in entries] if advanced else []
             for index, entry in enumerate(entries, 1):
                 check_cancel()
                 if entry.get("is_live"):
                     raise ValueError("直播進行中暫不支援，請在直播結束後下載回放。")
-                inputs = inputs_for(entry, ydl, request["audioOnly"])
-                name = f"{index:03d}." + ("mka" if request["audioOnly"] else "mkv")
+                plan = plans[index - 1] if advanced else None
+                inputs = inputs_for(entry, ydl, request["audioOnly"]) if not advanced else []
+                name = f"{index:03d}." + (plan[0] if plan else "mka" if request["audioOnly"] else "mkv")
                 final = output_dir / name
                 temporary = output_dir / (name + ".part")
                 progress = slot / "ffmpeg-progress.txt"
                 progress.write_text("")
                 duration = entry.get("duration")
-                update(phase="downloading", message=f"FFmpeg 下載與合併 {index}/{len(entries)}…",
+                update(phase="downloading", message=f"準備下載 {index}/{len(entries)}…",
                        title=str(entry.get("title") or request["platform"])[:200], progress=None)
                 print(f"[MediaPocket] FFmpeg 下載與合併 {index}/{len(entries)}…", flush=True)
+                paths = None
+                if advanced:
+                    paths = engine.download_tracks(ydl, entry, cache, request.get("connections", 4), update, check_cancel)
+                    update(phase="converting" if plan[3] else "merging", message="FFmpeg 轉碼中…" if plan[3] else "FFmpeg 原編碼合併中…", progress=0.8)
                 stop = threading.Event()
 
                 def monitor():
                     while not stop.wait(1):
-                        message = "等待 FFmpeg 安全結束；可在 a-Shell 按 Ctrl+C 停止。" if (slot / "cancel").exists() else f"FFmpeg 下載與合併 {index}/{len(entries)}…"
-                        update(message=message, progress=progress_value(progress, duration))
+                        message = "等待 FFmpeg 安全結束；可在 a-Shell 按 Ctrl+C 停止。" if (slot / "cancel").exists() else ("FFmpeg 轉碼中…" if plan and plan[3] else f"FFmpeg 下載與合併 {index}/{len(entries)}…")
+                        value = progress_value(progress, duration)
+                        update(message=message, progress=(0.8 + value * 0.19 if value is not None else 0.8) if advanced else value)
 
                 watcher = threading.Thread(target=monitor, daemon=True)
                 watcher.start()
                 try:
-                    result = runtime.run(ffmpeg_command(inputs, temporary, progress, request["audioOnly"]),
+                    command = engine.local_command(paths, temporary, progress, request["audioOnly"], plan) if advanced else ffmpeg_command(inputs, temporary, progress, request["audioOnly"])
+                    result = runtime.run(command,
                                          slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
                 finally:
                     stop.set()
@@ -489,18 +525,22 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 check_cancel()
                 if result:
                     raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
-                expected_audio = any(item[0].get("acodec") not in (None, "none") for item in inputs)
+                expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
                 verify_output(runtime, temporary, request["audioOnly"], slot, expected_audio)
                 os.replace(temporary, final)
                 outputs.append(name)
         check_cancel()
         if not outputs:
             raise ValueError("沒有取得影片。")
+        if advanced:
+            import shutil
+            try: shutil.rmtree(cache)
+            except OSError: print("[MediaPocket] 成品已驗證；部分暫存未能清理，可稍後從檔案 App 清理任務的 tracks 資料夾。", flush=True)
         update(phase="complete", message="下載與軌道驗證完成，返回 App 後匯入。", outputs=outputs, progress=1)
     except (KeyboardInterrupt, InterruptedError):
         update(phase="cancelled", message="已取消；未完成的檔案不會匯入。", progress=None)
     except Exception as error:
-        update(phase="failed", message=safe_error(error), progress=None)
+        update(phase="cancelled" if (slot / "cancel").exists() else "failed", message=safe_error(error), progress=None)
     print(status["message"])
     runtime.callback(job_id, token)
 

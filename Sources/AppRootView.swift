@@ -28,7 +28,7 @@ struct RootView: View {
             }
             Tab("下載", systemImage: "arrow.down.circle", value: 1) {
                 NavigationStack {
-                    DownloadCenterView(model: downloads, sources: sources)
+                    DownloadCenterView(model: downloads, sources: sources, library: library)
                 }
             }
             Tab("設定", systemImage: "gearshape", value: 2) { SettingsView() }

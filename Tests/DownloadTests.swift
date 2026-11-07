@@ -57,12 +57,55 @@ func rejectedCatalogIdentity() async throws {
     let slot = base.appending(path: "Bridge/jobs/\(request.id.uuidString)")
     let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)
     try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
-    for (schema, token) in [(1, "another-job"), (2, request.token)] {
+    for (schema, token) in [(1, "another-job"), (3, request.token)] {
         let catalog = DownloadCatalog(schema: schema, token: token, title: "Fixture", options: [DownloadOption(id: "video:720", label: "720p", audioOnly: false)])
         try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
         await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: "video:720") }
         #expect(try await store.jobs().first?.request.selection == nil)
     }
+}
+
+@Test("Detailed 8K60 catalog persists output policy and retry preserves partial track cache")
+func advancedSelectionAndRetry() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let store = DownloadStore(directory: base.appending(path: "Bridge"), library: MediaLibrary(directory: base.appending(path: "Media")))
+    let request = try await store.create(url: "https://youtu.be/fixture", requiresSelection: true, fast: true)
+    let slot = base.appending(path: "Bridge/jobs/\(request.id.uuidString)")
+    let option = DownloadOption(id: "v:0123456789abcdef", label: "4320p · 60 fps · AV1", audioOnly: false, height: 4320, fps: 60, videoCodec: "av1", container: "mp4", dynamicRange: "HDR10")
+    let catalog = DownloadCatalog(schema: 2, token: request.token, title: "Fixture", options: [option])
+    try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
+    var status = DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)
+    try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
+    await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: option.id, outputProfile: "mp3") }
+    let selected = try await store.select(request.id, optionID: option.id, outputProfile: "auto", fast: true, connections: 8)
+    #expect(selected.transferMode == "fast" && selected.connections == 8 && selected.outputProfile == "auto")
+    #expect(try await store.jobs().first?.catalog?.options.first?.fps == 60)
+    let cache = slot.appending(path: "tracks")
+    try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    let partial = cache.appending(path: "track.media.part")
+    try Data("partial bytes".utf8).write(to: partial)
+    try Data().write(to: slot.appending(path: "cancel"))
+    status.phase = "cancelled"
+    try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
+    let retry = try await store.retry(request.id)
+    #expect(retry.id == request.id && retry.attempt == 1 && retry.selection == option.id)
+    #expect(try Data(contentsOf: partial) == Data("partial bytes".utf8))
+    #expect(!FileManager.default.fileExists(atPath: slot.appending(path: "cancel").path))
+    await #expect(throws: (any Error).self) { try await store.retry(request.id) }
+}
+
+@Test("Validated output containers enter the existing library without duplicate copies", arguments: ["mp4", "webm", "m4a", "mp3", "flac", "wav"])
+func advancedContainerImport(_ suffix: String) async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let output = base.appending(path: "output")
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    try Data("fixture".utf8).write(to: output.appending(path: "001.\(suffix)"))
+    let library = MediaLibrary(directory: base.appending(path: "Media"))
+    let imported = try await library.acceptDownload(from: output, id: UUID(), outputs: ["001.\(suffix)"])
+    #expect(try await library.items(in: imported).first?.name == "001.\(suffix)")
+    #expect(!FileManager.default.fileExists(atPath: output.path))
 }
 
 @Test("Platform URLs are restricted to supported hosts and individual posts", arguments: [
@@ -81,7 +124,12 @@ func rejectedDownloadURL(_ url: String) {
     ("https://www.threads.com/@user/post/Abc_123?x=1", .threads),
     ("https://www.threads.net/share/Abc_123/", .threads),
     ("https://www.bilibili.com/video/BV123/?p=2", .bilibili),
-    ("https://b23.tv/abc123", .bilibili)
+    ("https://b23.tv/abc123", .bilibili),
+    ("https://www.tiktok.com/@user/video/123456", .tiktok),
+    ("https://vm.tiktok.com/Abc123/", .tiktok),
+    ("https://x.com/user/status/123456", .x),
+    ("https://vimeo.com/123456", .vimeo),
+    ("https://dai.ly/abc123", .dailymotion)
 ])
 func acceptedDownloadURL(_ entry: (String, DownloadPlatform)) throws {
     #expect(try DownloadPlatform.identify(entry.0).1 == entry.1)

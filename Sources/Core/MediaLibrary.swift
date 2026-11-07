@@ -115,7 +115,7 @@ actor MediaLibrary {
         let entries = try files.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
         guard Set(entries.map(\.lastPathComponent)).subtracting([receiptName]) == Set(outputs) else { throw DownloadError.invalidResult }
         for name in outputs {
-            guard name.range(of: #"^[0-9]{3}\.(?:mkv|mka)$"#, options: .regularExpression) != nil else { throw DownloadError.invalidResult }
+            guard name.range(of: #"^[0-9]{3}\.(?:mkv|mka|mp4|webm|m4a|mp3|flac|wav)$"#, options: .regularExpression) != nil else { throw DownloadError.invalidResult }
             let values = try source.appending(path: name).resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
             guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else { throw DownloadError.invalidResult }
         }

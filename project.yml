@@ -8,8 +8,8 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-    MARKETING_VERSION: "0.8.0"
-    CURRENT_PROJECT_VERSION: "8"
+    MARKETING_VERSION: "0.9.0"
+    CURRENT_PROJECT_VERSION: "9"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 packages:
   VLCKit:
@@ -24,8 +24,11 @@ targets:
         excludes:
           - Info.plist
           - Resources/runner.py
+          - Resources/download_engine.py
           - "**/__pycache__"
       - path: Sources/Resources/runner.py
+        buildPhase: resources
+      - path: Sources/Resources/download_engine.py
         buildPhase: resources
     dependencies:
       - package: VLCKit

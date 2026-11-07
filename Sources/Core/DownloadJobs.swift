@@ -1,13 +1,17 @@
 import Foundation
 
 enum DownloadPlatform: String, Codable, CaseIterable, Sendable {
-    case youtube, instagram, threads, bilibili
+    case youtube, instagram, threads, bilibili, tiktok, x, vimeo, dailymotion
     var title: String {
         switch self {
         case .youtube: "YouTube"
         case .instagram: "Instagram"
         case .threads: "Threads"
         case .bilibili: "Bilibili"
+        case .tiktok: "TikTok"
+        case .x: "X／Twitter"
+        case .vimeo: "Vimeo"
+        case .dailymotion: "Dailymotion"
         }
     }
 
@@ -39,6 +43,18 @@ enum DownloadPlatform: String, Codable, CaseIterable, Sendable {
         case "bilibili.com", "www.bilibili.com", "m.bilibili.com":
             guard path.range(of: #"^/video/(?:BV[A-Za-z0-9]+|av[0-9]+)/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }
             platform = .bilibili
+        case "tiktok.com", "www.tiktok.com":
+            guard path.range(of: #"^/(?:@[^/]+/video/[0-9]+|t/[A-Za-z0-9_-]+)/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .tiktok
+        case "vm.tiktok.com", "vt.tiktok.com":
+            guard path.range(of: #"^/[A-Za-z0-9_-]+/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .tiktok
+        case "x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com":
+            guard path.range(of: #"^/[^/]+/status/[0-9]+/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .x
+        case "vimeo.com", "www.vimeo.com", "player.vimeo.com":
+            guard path.range(of: #"^/(?:video/)?[0-9]+(?:/[A-Za-z0-9]+)?/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .vimeo
+        case "dailymotion.com", "www.dailymotion.com":
+            guard path.range(of: #"^/video/[A-Za-z0-9]+/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .dailymotion
+        case "dai.ly":
+            guard path.range(of: #"^/[A-Za-z0-9]+/?$"#, options: .regularExpression) != nil else { throw DownloadError.invalidURL }; platform = .dailymotion
         default: throw DownloadError.invalidURL
         }
         return (url, platform)
@@ -49,7 +65,7 @@ enum DownloadError: LocalizedError {
     case invalidURL, invalidResult, missingRunner, invalidSelection
     var errorDescription: String? {
         switch self {
-        case .invalidURL: "請貼上 HTTPS 影片或貼文連結：YouTube、Instagram、Threads 或 Bilibili。頻道與整份播放清單暫不支援。"
+        case .invalidURL: "請貼上支援平台的 HTTPS 單一影片或貼文連結。頻道與整份播放清單暫不支援。"
         case .invalidResult: "下載結果尚未完成或不符合預期，已保留原始檔，請查看任務狀態。"
         case .missingRunner: "找不到隨 App 附帶的下載程式，請重新安裝這個版本。"
         case .invalidSelection: "畫質清單或任務狀態已變更，請重新取得可用畫質。"
@@ -64,6 +80,13 @@ struct DownloadOption: Codable, Identifiable, Sendable {
     let id: String
     let label: String
     let audioOnly: Bool
+    var height: Int? = nil
+    var fps: Double? = nil
+    var videoCodec: String? = nil
+    var audioCodec: String? = nil
+    var container: String? = nil
+    var dynamicRange: String? = nil
+    var estimatedBytes: Int64? = nil
 }
 
 struct DownloadCatalog: Codable, Sendable {
@@ -84,6 +107,10 @@ struct DownloadRequest: Codable, Identifiable, Sendable {
     let method: DownloadMethod?
     var requiresSelection: Bool? = nil
     var selection: String? = nil
+    var outputProfile: String? = nil
+    var transferMode: String? = nil
+    var connections: Int? = nil
+    var attempt: Int? = nil
 
     var executionMethod: DownloadMethod { method ?? .ashell }
 }
@@ -120,20 +147,26 @@ actor DownloadStore {
         self.library = library
     }
 
-    func prepare(runner: URL) throws {
+    func prepare(runner: URL, engine: URL? = nil) throws {
         try files.createDirectory(at: directory.appending(path: "jobs"), withIntermediateDirectories: true)
         try files.createDirectory(at: directory.appending(path: "cookies"), withIntermediateDirectories: true)
         let destination = directory.appending(path: "runner.py")
         let data = try Data(contentsOf: runner)
         if (try? Data(contentsOf: destination)) != data { try data.write(to: destination, options: .atomic) }
+        if let engine {
+            let support = directory.appending(path: "download_engine.py")
+            let engineData = try Data(contentsOf: engine)
+            if (try? Data(contentsOf: support)) != engineData { try engineData.write(to: support, options: .atomic) }
+        }
     }
 
-    func create(url: String, quality: String = "best", audioOnly: Bool = false, requiresSelection: Bool = false) throws -> DownloadRequest {
+    func create(url: String, quality: String = "best", audioOnly: Bool = false, requiresSelection: Bool = false, fast: Bool = false) throws -> DownloadRequest {
         let (source, platform) = try DownloadPlatform.identify(url)
         let request = DownloadRequest(id: UUID(), token: UUID().uuidString,
                                       url: source.absoluteString, platform: platform,
                                       quality: ["best", "1080", "720"].contains(quality) ? quality : "1080",
-                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970, method: .ashell, requiresSelection: requiresSelection)
+                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970, method: .ashell, requiresSelection: requiresSelection,
+                                      transferMode: fast ? "fast" : nil, connections: fast ? 4 : nil)
         let slot = jobDirectory(request.id)
         try files.createDirectory(at: slot, withIntermediateDirectories: true)
         try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
@@ -172,7 +205,7 @@ actor DownloadStore {
         try Data("cancel".utf8).write(to: jobDirectory(id).appending(path: "cancel"), options: .atomic)
     }
 
-    func select(_ id: UUID, optionID: String) throws -> DownloadRequest {
+    func select(_ id: UUID, optionID: String, outputProfile: String = "original", fast: Bool? = nil, connections: Int = 4) throws -> DownloadRequest {
         let slot = jobDirectory(id)
         var request = try JSONDecoder().decode(DownloadRequest.self, from: Data(contentsOf: slot.appending(path: "request.json")))
         let status = try JSONDecoder().decode(DownloadStatus.self, from: Data(contentsOf: slot.appending(path: "status.json")))
@@ -182,10 +215,30 @@ actor DownloadStore {
               !files.fileExists(atPath: slot.appending(path: "imported.json").path) else { throw DownloadError.invalidSelection }
         let catalog = try readCatalog(slot: slot, token: request.token)
         guard let option = catalog.options.first(where: { $0.id == optionID }) else { throw DownloadError.invalidSelection }
+        let allowed = option.audioOnly ? ["original", "m4a", "mp3", "flac", "wav"] : ["original", "auto", "mp4", "h264", "hevc", "webm"]
+        guard allowed.contains(outputProfile), [1, 2, 4, 8].contains(connections) else { throw DownloadError.invalidSelection }
         request.selection = option.id
         request.audioOnly = option.audioOnly
+        request.outputProfile = outputProfile
+        if let fast { request.transferMode = fast ? "fast" : nil }
+        request.connections = connections
         try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
         let queued = DownloadStatus(phase: "queued", message: "已選擇 \(option.label)，等待 a-Shell 開始下載。", token: request.token, updated: Date().timeIntervalSince1970)
+        try JSONEncoder().encode(queued).write(to: slot.appending(path: "status.json"), options: .atomic)
+        return request
+    }
+
+    func retry(_ id: UUID) throws -> DownloadRequest {
+        let slot = jobDirectory(id)
+        var request = try JSONDecoder().decode(DownloadRequest.self, from: Data(contentsOf: slot.appending(path: "request.json")))
+        let status = try JSONDecoder().decode(DownloadStatus.self, from: Data(contentsOf: slot.appending(path: "status.json")))
+        guard request.id == id, request.executionMethod == .ashell, request.selection != nil,
+              status.token == request.token, ["failed", "cancelled"].contains(status.phase),
+              !files.fileExists(atPath: slot.appending(path: "imported.json").path) else { throw DownloadError.invalidSelection }
+        request.attempt = (request.attempt ?? 0) + 1
+        if files.fileExists(atPath: slot.appending(path: "cancel").path) { try files.removeItem(at: slot.appending(path: "cancel")) }
+        try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
+        let queued = DownloadStatus(phase: "queued", message: "正在重試；相同來源格式的暫存會嘗試續傳。", token: request.token, updated: Date().timeIntervalSince1970)
         try JSONEncoder().encode(queued).write(to: slot.appending(path: "status.json"), options: .atomic)
         return request
     }
@@ -195,9 +248,9 @@ actor DownloadStore {
         let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
         guard values.isSymbolicLink != true, (values.fileSize ?? Int.max) < 524288 else { throw DownloadError.invalidSelection }
         let catalog = try JSONDecoder().decode(DownloadCatalog.self, from: Data(contentsOf: url))
-        guard catalog.schema == 1, catalog.token == token, !catalog.options.isEmpty, catalog.options.count <= 64,
+        guard [1, 2].contains(catalog.schema), catalog.token == token, !catalog.options.isEmpty, catalog.options.count <= 160,
               Set(catalog.options.map(\.id)).count == catalog.options.count,
-              catalog.options.allSatisfy({ $0.id.range(of: #"^(video:(best|[0-9]{1,5})|audio:best)$"#, options: .regularExpression) != nil && $0.audioOnly == ($0.id == "audio:best") && !$0.label.isEmpty && $0.label.count <= 200 }) else { throw DownloadError.invalidSelection }
+              catalog.options.allSatisfy({ $0.id.range(of: #"^(video:(best|[0-9]{1,5})|audio:best|[va]:[a-f0-9]{16})$"#, options: .regularExpression) != nil && $0.audioOnly == ($0.id == "audio:best" || $0.id.hasPrefix("a:")) && !$0.label.isEmpty && $0.label.count <= 200 }) else { throw DownloadError.invalidSelection }
         return catalog
     }
 

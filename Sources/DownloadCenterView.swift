@@ -8,14 +8,21 @@ final class DownloadCenterModel {
     var setup: DownloadStatus?
     var error: String?
     var working = false
+    var fast = UserDefaults.standard.object(forKey: "fastDownloads") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(fast, forKey: "fastDownloads") }
+    }
+    var connections = UserDefaults.standard.object(forKey: "downloadConnections") as? Int ?? 4 {
+        didSet { UserDefaults.standard.set(connections, forKey: "downloadConnections") }
+    }
     let store: DownloadStore
 
     init(store: DownloadStore) { self.store = store }
 
     func prepare() async {
         do {
-            guard let runner = Bundle.main.url(forResource: "runner", withExtension: "py") else { throw DownloadError.missingRunner }
-            try await store.prepare(runner: runner)
+            guard let runner = Bundle.main.url(forResource: "runner", withExtension: "py"),
+                  let engine = Bundle.main.url(forResource: "download_engine", withExtension: "py") else { throw DownloadError.missingRunner }
+            try await store.prepare(runner: runner, engine: engine)
             await refresh()
         } catch { self.error = error.localizedDescription }
     }
@@ -32,19 +39,19 @@ final class DownloadCenterModel {
         working = true
         defer { working = false }
         do {
-            let request = try await store.create(url: source ?? link, requiresSelection: true)
+            let request = try await store.create(url: source ?? link, requiresSelection: true, fast: fast)
             if source == nil { link = "" }
             await refresh()
             await launch(DownloadStore.command(for: request.id, probe: true))
         } catch { self.error = error.localizedDescription }
     }
 
-    func download(_ job: DownloadJob, optionID: String) async {
+    func download(_ job: DownloadJob, optionID: String, profile: String) async {
         guard !working else { return }
         working = true
         defer { working = false }
         do {
-            let request = try await store.select(job.id, optionID: optionID)
+            let request = try await store.select(job.id, optionID: optionID, outputProfile: fast ? profile : "original", fast: fast, connections: connections)
             await refresh()
             await launch(DownloadStore.command(for: request.id))
         } catch { self.error = error.localizedDescription }
@@ -62,11 +69,20 @@ final class DownloadCenterModel {
         do { try await store.cancel(id); await refresh() }
         catch { self.error = error.localizedDescription }
     }
+
+    func retry(_ id: UUID) async {
+        do {
+            let request = try await store.retry(id)
+            await refresh()
+            await launch(DownloadStore.command(for: request.id))
+        } catch { self.error = error.localizedDescription }
+    }
 }
 
 struct DownloadCenterView: View {
     @Bindable var model: DownloadCenterModel
     let sources: SourceLibraryModel
+    let library: MediaLibrary
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSetup = false
 
@@ -80,7 +96,7 @@ struct DownloadCenterView: View {
                     Label("取得可用畫質", systemImage: "list.bullet.rectangle")
                 }.disabled(model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.working || model.setup?.phase != "ready")
             } header: { Text("貼上連結") }
-              footer: { Text("先切到 a-Shell 解析，再返回這裡選畫質；按下載後由 FFmpeg 下載與合併。支援 YouTube、Instagram、Threads、Bilibili，不需要捷徑。") }
+              footer: { Text("先解析，再回 App 選擇解析度、fps、編碼與輸出格式。來源有提供時可取 4K／8K 及更高原畫質，不升頻、不放大冒充高畫質。") }
             if model.setup?.phase != "ready" {
                 Section {
                     Button { showSetup = true } label: {
@@ -94,11 +110,12 @@ struct DownloadCenterView: View {
                     Text("取得畫質後，選單會出現在這裡。只列出來源實際提供、可由 FFmpeg 下載的格式。")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(model.jobs) { job in DownloadJobRow(job: job, model: model) }
+                ForEach(model.jobs) { job in DownloadJobRow(job: job, model: model, library: library) }
             }
             Section { DownloadOutputFolderButton(sources: sources) }
         }
         .navigationTitle("下載")
+        .navigationDestination(for: String.self) { LibraryFolderView(library: library, path: $0) }
         .toolbar {
             Button("下載設定", systemImage: "gearshape") { showSetup = true }
             Button("重新整理", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
@@ -124,11 +141,21 @@ struct DownloadCenterView: View {
 private struct DownloadJobRow: View {
     let job: DownloadJob
     let model: DownloadCenterModel
+    let library: MediaLibrary
     @State private var selected = ""
+    @State private var profile = "auto"
+    @State private var showFormats = false
 
     private var selection: String {
         job.catalog?.options.contains(where: { $0.id == selected }) == true ? selected : job.catalog?.options.first?.id ?? ""
     }
+    private var option: DownloadOption? { job.catalog?.options.first(where: { $0.id == selection }) }
+    private var profiles: [(String, String)] {
+        option?.audioOnly == true
+        ? [("original", "原編碼 MKA"), ("m4a", "M4A・AAC"), ("mp3", "MP3・320 kb/s"), ("flac", "FLAC"), ("wav", "WAV")]
+        : [("auto", "自動無損 MP4／MKV"), ("original", "原編碼 MKV"), ("mp4", "MP4・需要時自動轉碼"), ("h264", "MP4・H.264 相容轉碼"), ("hevc", "MP4・HEVC 轉碼"), ("webm", "WebM・原編碼")]
+    }
+    private var outputProfile: String { profiles.contains(where: { $0.0 == profile }) ? profile : "original" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -141,14 +168,30 @@ private struct DownloadJobRow: View {
             } else if let path = job.libraryPath {
                 Label("已匯入檔案庫", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text(path).font(.caption).textSelection(.enabled)
-            } else if job.status?.phase == "awaitingSelection", let catalog = job.catalog {
-                Picker("畫質與音訊", selection: Binding(get: { selection }, set: { selected = $0 })) {
-                    ForEach(catalog.options) { option in Text(option.label).tag(option.id) }
+                NavigationLink("播放／管理下載成品", systemImage: "play.rectangle") {
+                    LibraryFolderView(library: library, path: path)
                 }
-                Button("交給 a-Shell 用 FFmpeg 下載", systemImage: "arrow.down.circle.fill") {
-                    Task { await model.download(job, optionID: selection) }
+            } else if job.status?.phase == "awaitingSelection", let catalog = job.catalog {
+                Button { showFormats = true } label: {
+                    LabeledContent("來源畫質", value: option?.label ?? "選擇格式").multilineTextAlignment(.trailing)
+                }.sheet(isPresented: $showFormats) { DownloadFormatSheet(catalog: catalog, selected: $selected) }
+                if let size = option?.estimatedBytes {
+                    Text("預估來源大小：約 \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.fast {
+                    Picker("儲存格式", selection: Binding(get: { outputProfile }, set: { profile = $0 })) {
+                        ForEach(profiles, id: \.0) { entry in Text(entry.1).tag(entry.0) }
+                    }
+                    if ["mp4", "h264", "hevc", "m4a", "mp3", "flac", "wav"].contains(outputProfile) {
+                        Text("需要轉碼時會耗時、耗電，且不會提升來源畫質／音質。HDR 建議保留原編碼。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Button("開始下載與合併", systemImage: "arrow.down.circle.fill") {
+                    Task { await model.download(job, optionID: selection, profile: outputProfile) }
                 }.disabled(model.working || selection.isEmpty)
-                Text("下載時保持 a-Shell 在前景。多影片貼文列出共同解析度；也可選各片最高可用畫質。")
+                Text(model.fast ? "支援分段加速與失敗後續傳；FFmpeg 合併／轉碼完成後自動清理軌道暫存。請保持 a-Shell 在前景。" : "FFmpeg 直接下載，保留 MKV／MKA 原編碼；分片來源請改用加速模式。")
                     .font(.caption).foregroundStyle(.secondary)
                 rescanButton
             } else {
@@ -158,6 +201,9 @@ private struct DownloadJobRow: View {
                     ProgressView(value: min(1, max(0, progress)))
                 }
                 if job.status?.terminal == true || job.request.requiresSelection != true || job.status?.phase == "awaitingSelection" {
+                    if job.request.selection != nil && ["failed", "cancelled"].contains(job.status?.phase ?? "") {
+                        Button("重試／續傳相同任務", systemImage: "arrow.clockwise") { Task { await model.retry(job.id) } }
+                    }
                     rescanButton
                 } else {
                     Button(job.request.selection == nil ? "開啟 a-Shell 取得畫質" : "開啟 a-Shell 執行／檢查中斷") {
@@ -179,11 +225,18 @@ private struct DownloadJobRow: View {
 }
 
 private struct DownloadSetupView: View {
-    let model: DownloadCenterModel
+    @Bindable var model: DownloadCenterModel
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
+                Section("下載效能") {
+                    Toggle("分段加速與續傳", isOn: $model.fast)
+                    Picker("同時下載分段數", selection: $model.connections) {
+                        ForEach([1, 2, 4, 8], id: \.self) { Text("\($0) 段").tag($0) }
+                    }.disabled(!model.fast)
+                    Text("預設 4 段，適用原生 HLS／DASH 分段下載；一般 HTTP 檔案不會強制分塊。網路或平台限流時可降為 1–2 段。關閉後使用直接 FFmpeg 原編碼下載。")
+                }
                 Section("一次設定，完全免費") {
                     Link("安裝免費完整版 a-Shell", destination: URL(string: "https://apps.apple.com/app/a-shell/id1473805438")!)
                     Button("1. 授權下載交接資料夾") {
@@ -197,13 +250,13 @@ private struct DownloadSetupView: View {
                 }
                 Section("貼連結 → 選畫質 → 下載") {
                     Text("在本 App 貼連結、按取得畫質。a-Shell 解析完成後嘗試返回 App，在任務卡片選畫質，再按 FFmpeg 下載。兩個階段均可手動返回 App 重新整理，不需要建立或執行捷徑。")
-                    Text("畫質清單只保存選項，不保存會過期的影片來源網址。開始下載時重新解析，保留你選定的解析度；若來源已移除該畫質會顯示失敗，不自動降級。解析度未標示的來源仍可選最高可用畫質。")
+                    Text("支援 YouTube、Instagram、Threads、Bilibili、TikTok、X／Twitter、Vimeo、Dailymotion。實際格式受來源、地區及登入權限限制。清單保存解析度、fps、編碼等條件；下載時重新取得有效來源，不自動降級。")
                 }
                 Section("選填：需要登入的影片") {
-                    Text("將 Netscape Cookie 檔放進「MediaPocket → MediaPocketBridge → cookies」，命名為 youtube.txt、instagram.txt、threads.txt 或 bilibili.txt。Cookie 留在手機。來源限制、登入驗證或限流可能導致解析失敗；不處理 DRM。")
+                    Text("Netscape Cookie 檔放進「MediaPocket → MediaPocketBridge → cookies」，命名為 youtube.txt、instagram.txt、threads.txt、bilibili.txt、tiktok.txt、x.txt、vimeo.txt 或 dailymotion.txt。Cookie 留在手機；不處理 DRM。")
                 }
                 Section("下載成品") {
-                    Text("下載期間保持 a-Shell 在前景。FFmpeg 保留原編碼，影片為 MKV、音訊為 MKA。完成並驗證軌道後，返回 App 匯入「檔案庫 → App 內檔案 → Downloads」；未完成檔不匯入。也可加入其他成品資料夾，直接讀取原檔。")
+                    Text("完成並驗證軌道後，返回 App 匯入「檔案庫 → App 內檔案 → Downloads」，可直接管理和播放。分段模式在合併期間需要軌道暫存與成品空間；成功後清理暫存，失敗時保留供續傳。已加入來源資料夾仍從原位置讀取，不複製原影片。")
                 }
             }.navigationTitle("免費下載設定")
                 .toolbar { Button("完成") { dismiss() } }
