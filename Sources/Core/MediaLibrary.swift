@@ -105,10 +105,10 @@ actor MediaLibrary {
     func move(_ path: String, into destinationPath: String) throws {
         let source = try location(path, allowRoot: false)
         let folder = try location(destinationPath)
-        if source.deletingLastPathComponent().standardizedFileURL == folder { return }
-        let resolvedSource = source.resolvingSymlinksInPath().path(percentEncoded: false)
-        let resolvedFolder = folder.resolvingSymlinksInPath().path(percentEncoded: false)
-        guard resolvedFolder != resolvedSource, !resolvedFolder.hasPrefix(resolvedSource + "/") else {
+        if source.deletingLastPathComponent().resolvingSymlinksInPath().pathComponents == folder.resolvingSymlinksInPath().pathComponents { return }
+        let resolvedSource = source.resolvingSymlinksInPath().pathComponents
+        let resolvedFolder = folder.resolvingSymlinksInPath().pathComponents
+        guard !resolvedFolder.starts(with: resolvedSource) else {
             throw LibraryError.folderIntoItself
         }
         let values = try folder.resourceValues(forKeys: [.isDirectoryKey])
@@ -162,7 +162,7 @@ actor MediaLibrary {
         var isDirectory: ObjCBool = false
         if !files.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory) || !isDirectory.boolValue { folder = directory }
         let content = slot.appending(path: "content")
-        guard content.resolvingSymlinksInPath().path(percentEncoded: false).hasPrefix(directory.resolvingSymlinksInPath().path(percentEncoded: false) + "/") else {
+        guard isWithinLibrary(content) else {
             throw LibraryError.invalidPath
         }
         try files.moveItem(at: content, to: availableDestination(name: original.lastPathComponent, in: folder))
@@ -184,12 +184,14 @@ actor MediaLibrary {
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
         if path.isEmpty {
             guard allowRoot else { throw LibraryError.invalidPath }
-            return directory
+            return directory.resolvingSymlinksInPath()
         }
         guard components.allSatisfy({ !$0.isEmpty && !$0.hasPrefix(".") }) else { throw LibraryError.invalidPath }
-        let candidate = directory.appending(path: path).standardizedFileURL
-        let rootPath = directory.resolvingSymlinksInPath().path(percentEncoded: false)
-        guard candidate.resolvingSymlinksInPath().path(percentEncoded: false).hasPrefix(rootPath + "/") else { throw LibraryError.invalidPath }
+        // Resolve the existing root before appending a potentially nonexistent
+        // child; macOS /var aliases and trailing directory separators must not
+        // change the containment decision.
+        let candidate = directory.resolvingSymlinksInPath().appending(path: path).standardizedFileURL
+        guard isWithinLibrary(candidate) else { throw LibraryError.invalidPath }
         return candidate
     }
 
@@ -198,12 +200,18 @@ actor MediaLibrary {
 
     private func internalDirectory(_ name: String) throws -> URL {
         try prepare()
-        let url = directory.appending(path: name, directoryHint: .isDirectory)
-        guard url.resolvingSymlinksInPath().path(percentEncoded: false).hasPrefix(directory.resolvingSymlinksInPath().path(percentEncoded: false) + "/") else {
+        let url = directory.resolvingSymlinksInPath().appending(path: name, directoryHint: .isDirectory)
+        guard isWithinLibrary(url) else {
             throw LibraryError.invalidPath
         }
         try files.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func isWithinLibrary(_ url: URL) -> Bool {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let child = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        return child.count > root.count && child.starts(with: root)
     }
 
     private func availableDestination(name: String, in folder: URL) -> URL {
