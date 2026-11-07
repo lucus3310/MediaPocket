@@ -99,6 +99,11 @@ struct FramePlaybackTests {
             #expect(stepped)
             #expect(abs(session.seconds - times[index]) < 0.003)
         }
+        let forwardBatch = await session.stepFrames(4)
+        #expect(forwardBatch && abs(session.seconds - times[15]) < 0.003)
+        let backwardBatch = await session.stepFrames(-4)
+        #expect(backwardBatch && abs(session.seconds - times[11]) < 0.003)
+        #expect(!session.traversing && !session.playing)
     }
 
     @Test("VLC confirms both forward and backward single-frame requests")
@@ -123,7 +128,80 @@ struct FramePlaybackTests {
         }
         let backward = await session.stepFrame(-1)
         #expect(backward, "VLC previous-frame result: \(session.stepMessage ?? "none")")
+        let batch = await session.stepFrames(3)
+        #expect(batch && !session.traversing)
         #expect(!session.playing)
+    }
+
+    @Test("A–B returns to A on both engines and manual seek disables it", arguments: [false, true])
+    func rangePlayback(vlc: Bool) async throws {
+        let (url, _) = try await makeClip(variable: false)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let item = LibraryItem(url: url, relativePath: url.lastPathComponent, isDirectory: false, size: 0, modified: .now)
+        let window = try playbackWindow()
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        if vlc {
+            let session = VLCPlaybackSession()
+            let canvas = UIView(frame: window.bounds)
+            controller.view.addSubview(canvas)
+            session.player.drawable = canvas
+            defer { session.stop(); session.player.drawable = nil }
+            session.start(item, resume: false)
+            try await waitFor { session.refresh(); return session.ready && session.seekable }
+            session.seek(0.15)
+            try await waitFor { session.refresh(); return abs(session.seconds - session.duration * 0.15) < 0.1 }
+            session.markRange(.a)
+            session.seek(0.5)
+            try await waitFor { session.refresh(); return abs(session.seconds - session.duration * 0.5) < 0.1 }
+            session.markRange(.b)
+            session.toggleRange()
+            session.seek(0.3)
+            try await waitFor { session.refresh(); return abs(session.seconds - session.duration * 0.3) < 0.1 }
+            session.toggle()
+            var returned = false
+            for _ in 0..<80 {
+                session.refresh()
+                if session.range.shouldRestart(at: session.seconds) {
+                    await session.serviceRange()
+                    returned = session.seconds < (session.range.end ?? 0) - 0.1
+                    if returned { break }
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(returned && session.range.enabled)
+            session.pause(); session.seek(0.9)
+            #expect(!session.range.enabled)
+        } else {
+            let session = SystemPlaybackSession()
+            let canvas = SystemVideoCanvas(player: session.player)
+            canvas.frame = window.bounds
+            controller.view.addSubview(canvas)
+            defer { session.stop() }
+            await session.prepare(item, autoplay: false, resume: false)
+            try await waitFor { session.refresh(); return session.ready }
+            await session.seek(0.15); session.markRange(.a)
+            await session.seek(0.5); session.markRange(.b)
+            session.toggleRange()
+            await session.seek(0.3)
+            session.toggle(rate: 1)
+            var returned = false
+            for _ in 0..<80 {
+                session.refresh()
+                if session.range.shouldRestart(at: session.seconds) {
+                    await session.serviceRange()
+                    returned = session.seconds < (session.range.end ?? 0) - 0.1
+                    if returned { break }
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(returned && session.range.enabled)
+            session.pause(); await session.seek(0.9)
+            #expect(!session.range.enabled)
+            try await saveDockReview()
+        }
     }
 
     @Test("8x renderer zoom preserves the player and supports panning and rotation reset")
@@ -145,6 +223,42 @@ struct FramePlaybackTests {
         viewport.layoutIfNeeded()
         #expect(viewport.zoomScale == 1)
         #expect(canvas.playerLayer.player === player)
+    }
+}
+
+@MainActor
+private func saveDockReview() async throws {
+    var range = PlaybackRange()
+    range.mark(.a, seconds: 15, duration: 90)
+    range.mark(.b, seconds: 35, duration: 90)
+    range.toggle()
+    let folder = URL.documentsDirectory.appending(path: "InterfaceReview")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    for (name, size) in [("portrait", CGSize(width: 390, height: 844)), ("landscape", CGSize(width: 844, height: 390))] {
+        let window = try playbackWindow()
+        window.frame = CGRect(origin: .zero, size: size)
+        let view = ZStack {
+            Color.black
+            Text("MediaPocket").font(.title2).foregroundStyle(.white.opacity(0.25))
+            VStack {
+                Spacer()
+                FrameTransport(position: 1.0 / 3, seconds: 30, duration: 90,
+                    playing: false, ready: true, busy: false, forward: true, backward: true,
+                    message: nil, range: range, rate: .constant(0.5), toggle: {}, pause: {}, seek: { _ in },
+                    step: { _ in }, mark: { _ in }, toggleRange: {}, clearRange: {})
+                    .padding(.horizontal, 12).padding(.bottom, 8)
+            }
+        }.preferredColorScheme(.dark).tint(.white)
+        let controller = UIHostingController(rootView: view)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.view.setNeedsLayout(); controller.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(200))
+        let renderer = UIGraphicsImageRenderer(bounds: controller.view.bounds)
+        let image = renderer.image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
+        let data = try #require(image.pngData())
+        try data.write(to: folder.appending(path: "PlayerDock-\(name).png"))
+        window.isHidden = true
     }
 }
 

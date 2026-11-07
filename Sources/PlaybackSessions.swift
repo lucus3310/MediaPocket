@@ -21,6 +21,8 @@ final class SystemPlaybackSession {
     private(set) var canStepForward = false
     private(set) var canStepBackward = false
     private(set) var stepping = false
+    private(set) var traversing = false
+    private(set) var range = PlaybackRange()
     private(set) var unsupported = false
     private(set) var errorMessage: String?
     private(set) var stepMessage: String?
@@ -76,8 +78,41 @@ final class SystemPlaybackSession {
     func seek(_ position: Double) async {
         guard !stepping, duration.isFinite, duration > 0 else { return }
         restoreAudioTracks()
+        range.disableIfOutside(min(max(position, 0), 1) * duration)
         await player.seek(to: CMTime(seconds: min(max(position, 0), 1) * duration, preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero)
         refresh()
+    }
+
+    func pause() { player.pause(); refresh() }
+
+    func markRange(_ point: PlaybackRangePoint) {
+        pause()
+        if !range.mark(point, seconds: seconds, duration: duration) { stepMessage = "請先設定 A 點，再將 B 設在 A 之後。" }
+    }
+
+    func toggleRange() {
+        if !range.toggle() { stepMessage = "先設定有效的 A、B 起終點。" }
+    }
+
+    func clearRange() { range = PlaybackRange() }
+
+    func serviceRange() async {
+        guard playing, !stepping, !traversing, range.shouldRestart(at: seconds), let start = range.start else { return }
+        let selected = range
+        let finished = await player.seek(to: CMTime(seconds: start, preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero)
+        guard !stopped, !Task.isCancelled, range == selected else { return }
+        if !finished { range.disable(); stepMessage = "無法返回 A 點，已關閉循環。" }
+        refresh()
+    }
+
+    func stepFrames(_ count: Int) async -> Bool {
+        guard !traversing, !stepping, count != 0, (-60...60).contains(count) else { return false }
+        traversing = true
+        defer { traversing = false }
+        for _ in 0..<abs(count) {
+            guard !Task.isCancelled, await stepFrame(count > 0 ? 1 : -1) else { return false }
+        }
+        return true
     }
 
     // AVPlayerItem chooses the adjacent video sample. No 1/fps estimate is used,
@@ -100,6 +135,7 @@ final class SystemPlaybackSession {
             guard !Task.isCancelled, !stopped else { return false }
             if CMTimeCompare(current.currentTime(), before) != 0 {
                 refresh()
+                range.disableIfOutside(seconds)
                 stepMessage = direction > 0 ? "下一幀" : "上一幀"
                 return true
             }
@@ -113,6 +149,7 @@ final class SystemPlaybackSession {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        clearRange()
         let time = player.currentTime().seconds
         if time.isFinite, time > 0 { UserDefaults.standard.set(time, forKey: resumeKey) }
         player.pause()
@@ -151,6 +188,8 @@ final class VLCPlaybackSession {
     private(set) var seekable = false
     private(set) var ready = false
     private(set) var stepping = false
+    private(set) var traversing = false
+    private(set) var range = PlaybackRange()
     private(set) var errorMessage: String?
     private(set) var stepMessage: String?
     private var resumeKey = ""
@@ -195,7 +234,51 @@ final class VLCPlaybackSession {
         if player.state == .error { errorMessage = "VLC 無法解碼這個媒體，請確認檔案完整性或改用系統播放器。" }
     }
 
-    func seek(_ value: Double) { guard !stepping else { return }; player.position = .init(min(max(value, 0), 1)) }
+    func seek(_ value: Double) {
+        guard !stepping else { return }
+        let target = min(max(value, 0), 1)
+        range.disableIfOutside(target * duration)
+        player.position = .init(target)
+    }
+    func pause() { player.pause(); refresh() }
+
+    func markRange(_ point: PlaybackRangePoint) {
+        pause()
+        if !range.mark(point, seconds: seconds, duration: duration) { stepMessage = "請先設定 A 點，再將 B 設在 A 之後。" }
+    }
+
+    func toggleRange() {
+        if !range.toggle() { stepMessage = "先設定有效的 A、B 起終點。" }
+    }
+
+    func clearRange() { range = PlaybackRange() }
+
+    func serviceRange() async {
+        guard playing, seekable, !stepping, !traversing, duration > 0,
+              range.shouldRestart(at: seconds), let start = range.start else { return }
+        let selected = range
+        let token = generation
+        player.position = .init(start / duration)
+        // Wait for an asynchronous VLC seek before requesting another one.
+        for _ in 0..<200 {
+            guard !Task.isCancelled, started, generation == token, range == selected else { return }
+            refresh()
+            if abs(seconds - start) < 0.2 { return }
+            do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+        }
+        range.disable()
+        stepMessage = "無法返回 A 點，已關閉循環。"
+    }
+
+    func stepFrames(_ count: Int) async -> Bool {
+        guard !traversing, !stepping, count != 0, (-60...60).contains(count) else { return false }
+        traversing = true
+        defer { traversing = false }
+        for _ in 0..<abs(count) {
+            guard !Task.isCancelled, await stepFrame(count > 0 ? 1 : -1) else { return false }
+        }
+        return true
+    }
     func toggle(rate: Float = 1) {
         guard !stepping else { return }
         if player.isPlaying { player.pause() } else { player.play(); player.rate = rate }
@@ -222,7 +305,11 @@ final class VLCPlaybackSession {
             guard !Task.isCancelled, started, generation == token else { return false }
             if let result = frameResult, result != 1 {
                 refresh()
-                if result == 0 { stepMessage = direction > 0 ? "下一幀" : "上一幀"; return true }
+                if result == 0 {
+                    range.disableIfOutside(seconds)
+                    stepMessage = direction > 0 ? "下一幀" : "上一幀"
+                    return true
+                }
                 stepMessage = result == 5 ? "此來源目前不支援向後逐幀。" : "引擎未能完成這次逐幀（\(result)）。"
                 return false
             }
@@ -236,6 +323,7 @@ final class VLCPlaybackSession {
         guard started else { return }
         if pendingResume == nil, seconds.isFinite { UserDefaults.standard.set(seconds, forKey: resumeKey) }
         started = false
+        clearRange()
         generation = UUID()
         player.delegate = nil
         frameDelegate = nil

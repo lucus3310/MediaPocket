@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import subprocess
+import shutil
 
 
 def run(*args, **kwargs):
@@ -28,5 +29,11 @@ run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'Media
 Path('build/artifacts/playback-tests.json').write_text(json.dumps({
     'device': device['name'], 'result': 'passed', 'physicalIphone': False,
     'checks': ['CFR and VFR native adjacent-frame timestamps', 'VLC next and previous frame callbacks',
-               '8x renderer transform, pan, player preservation and rotation reset']
+               '8x renderer transform, pan, player preservation and rotation reset',
+               'multi-frame traversal follows adjacent samples', 'A-B looping on both engines and seek-outside disable'],
+    'interfaceRenders': 'native SwiftUI dock at portrait and landscape sizes; not physical gesture tests'
 }, indent=2) + '\n')
+container = Path(run('xcrun', 'simctl', 'get_app_container', identifier,
+                     'io.github.lucus3310.MediaPocket', 'data', capture_output=True, text=True).stdout.strip())
+for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png']:
+    shutil.copyfile(container / 'Documents/InterfaceReview' / name, Path('build/artifacts') / name)

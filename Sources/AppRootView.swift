@@ -27,7 +27,9 @@ struct RootView: View {
                 }
             }
             Tab("設定", systemImage: "gearshape", value: 2) { SettingsView() }
-        }.tint(.indigo)
+        }.tint(Color(red: 0.73, green: 0.85, blue: 0.98))
+            .preferredColorScheme(.dark)
+            .toolbarBackground(.black, for: .tabBar)
             .onOpenURL { url in
                 guard url.scheme == "mediapocket" else { return }
                 selectedTab = 1
