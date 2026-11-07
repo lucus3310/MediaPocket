@@ -86,7 +86,7 @@ struct SourcePresentations: ViewModifier {
     }
 }
 
-private enum SourcePickerMode: Equatable { case files, folder }
+enum SourcePickerMode: Equatable { case files, folder }
 private struct SourcePickerRequest: Identifiable {
     let id = UUID()
     let mode: SourcePickerMode
@@ -94,12 +94,13 @@ private struct SourcePickerRequest: Identifiable {
 }
 
 // `.open`, never `.import`: providers return the selected original URL.
-private struct OriginalSourcePicker: UIViewControllerRepresentable {
+struct OriginalSourcePicker: UIViewControllerRepresentable {
     let mode: SourcePickerMode
     let completed: @MainActor (Result<[URL], any Error>) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(completed: completed) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: mode == .folder ? [.folder] : [.data], asCopy: false)
+        picker.title = mode == .folder ? "加入整個資料夾" : "原位置開啟檔案"
         picker.delegate = context.coordinator
         // Use the default single selection, including on iOS 26/27 where some
         // providers have issues changing allowsMultipleSelection for folders.
@@ -126,11 +127,16 @@ struct SourceLibraryView: View {
     var body: some View {
         List {
             Section {
+                Button { choose(.folder) } label: {
+                    Label("加入整個資料夾", systemImage: "folder.badge.plus").font(.headline)
+                }
+                Button("原位置開啟單一影片／檔案", systemImage: "play.rectangle") { choose(.files) }
+            } header: { Text("加入來源") }
+              footer: { Text("加入資料夾：進入目標資料夾後，按選擇器右上角「開啟」，即可加入整個資料夾及瀏覽其中的子資料夾。") }
+            Section {
                 if model.sources.isEmpty {
-                    ContentUnavailableView("從原位置開始", systemImage: "folder.badge.plus",
-                        description: Text("選取影片或加入整個資料夾，保留原檔，不另外複製。下次開啟 App 仍會保留來源。"))
-                    Button("原位置開啟影片／檔案", systemImage: "play.rectangle") { choose(.files) }
-                    Button("加入整個資料夾", systemImage: "folder.badge.plus") { choose(.folder) }
+                    Text("尚未加入來源。加入資料夾後，可直接瀏覽其中影片；保留原檔，下次開啟仍會記住來源。")
+                        .foregroundStyle(.secondary).padding(.vertical, 8)
                 }
                 ForEach(model.sources) { source in
                     Group {
@@ -166,10 +172,7 @@ struct SourceLibraryView: View {
         }
         .navigationTitle("檔案庫")
         .toolbar {
-            Menu {
-                Button("原位置開啟影片／檔案", systemImage: "play.rectangle") { choose(.files) }
-                Button("加入整個資料夾", systemImage: "folder.badge.plus") { choose(.folder) }
-            } label: { Label("加入原位置來源", systemImage: "plus") }.disabled(model.preparing)
+            Button("加入資料夾", systemImage: "folder.badge.plus") { choose(.folder) }.disabled(model.preparing)
         }
         .sheet(item: $picker, onDismiss: { pickerDismissed = true; model.selecting = false; openWhenDismissed() }) { request in
             OriginalSourcePicker(mode: request.mode) { result in
@@ -184,7 +187,7 @@ struct SourceLibraryView: View {
                     }
                 case .failure(let error): model.error = error.localizedDescription
                 }
-            }.ignoresSafeArea()
+            }.id(request.id).ignoresSafeArea()
         }
         .refreshable { await model.refresh() }
         .task { await model.refresh() }

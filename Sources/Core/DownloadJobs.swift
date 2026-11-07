@@ -46,13 +46,31 @@ enum DownloadPlatform: String, Codable, CaseIterable, Sendable {
 }
 
 enum DownloadError: LocalizedError {
-    case invalidURL, invalidResult, missingRunner
+    case invalidURL, invalidResult, missingRunner, invalidShortcut, shortcutPlatform
     var errorDescription: String? {
         switch self {
         case .invalidURL: "請貼上 HTTPS 影片或貼文連結：YouTube、Instagram、Threads 或 Bilibili。頻道與整份播放清單暫不支援。"
         case .invalidResult: "下載結果尚未完成或不符合預期，已保留原始檔，請查看任務狀態。"
         case .missingRunner: "找不到隨 App 附帶的下載程式，請重新安裝這個版本。"
+        case .invalidShortcut: "請在下載設定填入 1–120 字的實際捷徑名稱。"
+        case .shortcutPlatform: "這份 SMG 捷徑用於 YouTube／Bilibili。Instagram 與 Threads 請選「App FFmpeg」。"
         }
+    }
+}
+
+enum DownloadMethod: String, Codable, Sendable { case smgShortcut, ashell }
+
+enum SMGShortcutHandoff {
+    static func url(name: String, source: String) throws -> URL {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 120, name.rangeOfCharacter(from: .controlCharacters) == nil else { throw DownloadError.invalidShortcut }
+        let (sourceURL, platform) = try DownloadPlatform.identify(source)
+        guard platform == .youtube || platform == .bilibili else { throw DownloadError.shortcutPlatform }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let encodedName = name.addingPercentEncoding(withAllowedCharacters: allowed),
+              let encodedInput = sourceURL.absoluteString.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: "shortcuts://run-shortcut?name=\(encodedName)&input=text&text=\(encodedInput)") else { throw DownloadError.invalidShortcut }
+        return url
     }
 }
 
@@ -64,6 +82,9 @@ struct DownloadRequest: Codable, Identifiable, Sendable {
     let quality: String
     let audioOnly: Bool
     let created: Double
+    let method: DownloadMethod?
+
+    var executionMethod: DownloadMethod { method ?? .ashell }
 }
 
 struct DownloadStatus: Codable, Sendable {
@@ -105,12 +126,13 @@ actor DownloadStore {
         if (try? Data(contentsOf: destination)) != data { try data.write(to: destination, options: .atomic) }
     }
 
-    func create(url: String, quality: String, audioOnly: Bool) throws -> DownloadRequest {
+    func create(url: String, quality: String, audioOnly: Bool, method: DownloadMethod = .ashell) throws -> DownloadRequest {
         let (source, platform) = try DownloadPlatform.identify(url)
+        if method == .smgShortcut, platform != .youtube && platform != .bilibili { throw DownloadError.shortcutPlatform }
         let request = DownloadRequest(id: UUID(), token: UUID().uuidString,
                                       url: source.absoluteString, platform: platform,
                                       quality: ["best", "1080", "720"].contains(quality) ? quality : "1080",
-                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970)
+                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970, method: method)
         let slot = jobDirectory(request.id)
         try files.createDirectory(at: slot, withIntermediateDirectories: true)
         try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
@@ -146,6 +168,12 @@ actor DownloadStore {
 
     func cancel(_ id: UUID) throws {
         try Data("cancel".utf8).write(to: jobDirectory(id).appending(path: "cancel"), options: .atomic)
+    }
+
+    func markShortcutHandoff(_ request: DownloadRequest) throws {
+        let status = DownloadStatus(phase: "shortcut", message: "已交給 SMG 捷徑。請在捷徑選擇整支／片段及畫質；完成後從已加入的成品資料夾查看。App 尚未驗證下載結果。",
+                                    token: request.token, updated: Date().timeIntervalSince1970)
+        try JSONEncoder().encode(status).write(to: jobDirectory(request.id).appending(path: "status.json"), options: .atomic)
     }
 
     func setupStatus() -> DownloadStatus? {

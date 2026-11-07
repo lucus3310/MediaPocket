@@ -313,6 +313,22 @@ private func saveDockReview() async throws {
         try data.write(to: folder.appending(path: "PlayerDock-\(name).png"))
         window.isHidden = true
     }
+    let library = MediaLibrary()
+    let downloads = DownloadCenterModel(store: DownloadStore(library: library))
+    let view = NavigationStack {
+        DownloadCenterView(model: downloads, sources: SourceLibraryModel())
+    }.preferredColorScheme(.dark).tint(.white)
+    let window = try playbackWindow()
+    window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let controller = UIHostingController(rootView: view)
+    window.rootViewController = controller
+    window.makeKeyAndVisible()
+    controller.view.setNeedsLayout(); controller.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(300))
+    let renderer = UIGraphicsImageRenderer(bounds: controller.view.bounds)
+    let image = renderer.image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
+    try #require(image.pngData()).write(to: folder.appending(path: "DownloadCenter-home.png"))
+    window.isHidden = true
 }
 
 @MainActor

@@ -1,0 +1,16 @@
+{
+  "reference": "SMG+YouTube.shortcut",
+  "sha256": "bbc8bec9362ba37a38f9ff13c2f68feaaef8aa0bd1efda9500db7c15617efd03",
+  "analysis": "Offline decode of signed shortcut structure; original file is neither modified nor published",
+  "actionCount": 53,
+  "platforms": ["youtube", "bilibili"],
+  "shell": "a-Shell mini",
+  "script": "~/Documents/v1.3.1.py",
+  "callbackName": "SMG YouTube",
+  "callbackPrefix": "SMG131:",
+  "steps": ["plain URL input", "whole video or clip menu", "Base64 of menu result", "scan", "SMG131 task callback", "read task JSON", "choose format", "download"],
+  "resultFoldersRelativeToMiniDocuments": ["youtube", "bilibili"],
+  "handoff": "shortcuts://run-shortcut with percent-encoded name, input=text, and text=source URL",
+  "completionReporting": "No final result imported or assumed; use a linked original output folder",
+  "physicalIphoneIntegrationVerified": false
+}

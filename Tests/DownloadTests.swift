@@ -2,6 +2,40 @@ import Foundation
 import Testing
 @testable import MediaPocketCore
 
+@Test("SMG handoff round-trips literal URL text without injecting callback parameters")
+func shortcutInputEncoding() throws {
+    let source = "https://www.youtube.com/watch?v=abc&x=a+b%26c#clip=00:10-00:30"
+    let url = try SMGShortcutHandoff.url(name: " SMG YouTube + 測試 ", source: source)
+    let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    #expect(components.scheme == "shortcuts")
+    #expect(components.host == "run-shortcut")
+    #expect(components.queryItems?.count == 3)
+    #expect(components.queryItems?.first(where: { $0.name == "name" })?.value == "SMG YouTube + 測試")
+    #expect(components.queryItems?.first(where: { $0.name == "text" })?.value == source)
+    #expect(components.queryItems?.first(where: { $0.name == "input" })?.value == "text")
+    #expect(throws: (any Error).self) { try SMGShortcutHandoff.url(name: "", source: source) }
+    #expect(throws: (any Error).self) { try SMGShortcutHandoff.url(name: "SMG YouTube", source: "https://www.instagram.com/reel/abc/") }
+}
+
+@Test("Legacy requests keep their native route; Shortcut handoff never imports or claims completion")
+func shortcutJobPersistence() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let library = MediaLibrary(directory: base.appending(path: "Media"))
+    let store = DownloadStore(directory: base.appending(path: "Bridge"), library: library)
+    let request = try await store.create(url: "https://b23.tv/abc", quality: "best", audioOnly: false, method: .smgShortcut)
+    try await store.markShortcutHandoff(request)
+    let restored = try #require(try await store.jobs().first)
+    #expect(restored.request.executionMethod == .smgShortcut)
+    #expect(restored.status?.phase == "shortcut")
+    #expect(restored.status?.terminal == false)
+    #expect(restored.libraryPath == nil)
+    var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+    legacy.removeValue(forKey: "method")
+    let decoded = try JSONDecoder().decode(DownloadRequest.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.executionMethod == .ashell)
+}
+
 @Test("Platform URLs are restricted to supported hosts and individual posts", arguments: [
     "https://youtube.com.evil.example/watch?v=abc", "https://youtube.com@evil.example/watch?v=abc",
     "https://www.youtube.com/playlist?list=all", "https://www.instagram.com/username/",

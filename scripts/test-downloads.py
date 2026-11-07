@@ -5,6 +5,7 @@ import functools
 from http.cookiejar import Cookie
 import http.server
 import importlib.util
+import io
 import json
 from pathlib import Path
 import shutil
@@ -22,6 +23,40 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("runner", ROOT / "Sources/Resources/runner.py")
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+
+
+class StartupTests(unittest.TestCase):
+    def test_runtime_failure_is_visible_and_persisted_for_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Path(temporary)
+            console = io.StringIO()
+            with patch.object(runner, "__file__", str(bridge / "runner.py")), \
+                 patch.object(runner, "Runtime", side_effect=RuntimeError("native API unavailable")), \
+                 patch.object(sys, "argv", ["runner.py", "--setup"]), contextlib.redirect_stdout(console):
+                runner.main()
+            status = json.loads((bridge / "setup.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["phase"], "failed")
+            self.assertIn("native API unavailable", status["message"])
+            self.assertIn("MediaPocket", console.getvalue())
+
+    def test_job_bootstrap_failure_keeps_token_and_does_not_overwrite_completion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Path(temporary)
+            job_id, token = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()
+            slot = bridge / "jobs" / job_id
+            slot.mkdir(parents=True)
+            (slot / "request.json").write_text(json.dumps({"id": job_id, "token": token}))
+            for expected in ("failed", "complete"):
+                if expected == "complete":
+                    runner.atomic_json(slot / "status.json", {"phase": "complete", "token": token, "outputs": ["001.mkv"]})
+                with patch.object(runner, "__file__", str(bridge / "runner.py")), \
+                     patch.object(runner, "Runtime", side_effect=RuntimeError("unavailable https://cdn.test/?token=SECRET")), \
+                     patch.object(sys, "argv", ["runner.py", "--job", job_id]), contextlib.redirect_stdout(io.StringIO()):
+                    runner.main()
+                status = json.loads((slot / "status.json").read_text(encoding="utf-8"))
+                self.assertEqual(status["phase"], expected)
+                self.assertEqual(status["token"], token)
+                self.assertNotIn("SECRET", json.dumps(status))
 
 
 class Contracts(unittest.TestCase):

@@ -23,7 +23,7 @@ import time
 from urllib.parse import parse_qs, quote, urlparse
 import uuid
 
-VERSION = "0.4.0"
+VERSION = "0.7.0"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -122,6 +122,7 @@ class Runtime:
 def setup(bridge, runtime):
     status = {"phase": "installing", "message": "正在安裝免費解析元件…", "token": "setup", "updated": time.time()}
     atomic_json(bridge / "setup.json", status)
+    print("[MediaPocket] 安裝／更新 yt-dlp 與解析元件…", flush=True)
     try:
         if sys.version_info < (3, 11):
             raise ValueError("請先在 App Store 更新完整版 a-Shell；需要 Python 3.11 以上。")
@@ -159,9 +160,9 @@ class QuietLog:
     def debug(self, message):
         pass
     def warning(self, message):
-        pass
+        print("[yt-dlp] " + safe_error(message), flush=True)
     def error(self, message):
-        pass
+        print("[yt-dlp] " + safe_error(message), flush=True)
 
 
 def strict_threads_extractor():
@@ -199,7 +200,9 @@ def format_selector(quality, audio_only):
 
 @contextlib.contextmanager
 def extractor(request, bridge):
+    print("[MediaPocket] 載入 yt-dlp…", flush=True)
     import yt_dlp
+    print("[MediaPocket] yt-dlp 已啟動，正在解析 " + request["platform"] + "…", flush=True)
     cookie = bridge / "cookies" / (request["platform"] + ".txt")
     options = {
         "format": format_selector(request["quality"], request["audioOnly"]),
@@ -220,6 +223,7 @@ def extractor(request, bridge):
         entries = list(info.get("entries") or [info]) if info else []
         if not entries or len(entries) > 20 or any(item is None for item in entries):
             raise ValueError("這則貼文沒有可下載的影片，或包含超過 20 段影片。")
+        print(f"[MediaPocket] 解析完成：{len(entries)} 段，接著啟動 FFmpeg。", flush=True)
         yield ydl, entries
 
 
@@ -374,6 +378,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction):
                 duration = entry.get("duration")
                 update(phase="downloading", message=f"FFmpeg 下載與合併 {index}/{len(entries)}…",
                        title=str(entry.get("title") or request["platform"])[:200], progress=None)
+                print(f"[MediaPocket] FFmpeg 下載與合併 {index}/{len(entries)}…", flush=True)
                 stop = threading.Event()
 
                 def monitor():
@@ -408,6 +413,36 @@ def _execute_job(bridge, slot, job_id, runtime, extraction):
     runtime.callback(job_id, token)
 
 
+def record_startup_failure(bridge, arguments, error):
+    """Failures before run_job has created status must also reach the App."""
+    message = "無法啟動下載工具：" + safe_error(error)
+    print("[MediaPocket] " + message, flush=True)
+    try:
+        if arguments.setup:
+            destination, token = bridge / "setup.json", "setup"
+        else:
+            job_id = str(uuid.UUID(arguments.job)).upper()
+            root = bridge / "jobs"
+            slot = root / job_id
+            if slot.is_symlink() or slot.resolve().parent != root.resolve():
+                return
+            request_path = slot / "request.json"
+            if request_path.is_symlink():
+                return
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            if str(uuid.UUID(request["id"])).upper() != job_id:
+                return
+            token = str(uuid.UUID(request["token"])).upper()
+            destination = slot / "status.json"
+            if destination.exists():
+                previous = json.loads(destination.read_text(encoding="utf-8"))
+                if previous.get("token") == token and previous.get("phase") in ("complete", "failed", "cancelled"):
+                    return
+        atomic_json(destination, {"phase": "failed", "message": message, "token": token, "updated": time.time()})
+    except Exception:
+        print("[MediaPocket] 無法寫回狀態；請檢查 MediaPocketBridge 子資料夾授權。", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="MediaPocket free a-Shell FFmpeg companion")
     actions = parser.add_mutually_exclusive_group(required=True)
@@ -415,15 +450,15 @@ def main():
     actions.add_argument("--job")
     arguments = parser.parse_args()
     bridge = Path(__file__).resolve().parent
-    runtime = Runtime()
-    if arguments.setup:
-        setup(bridge, runtime)
-    else:
-        try:
+    print(f"[MediaPocket] MediaPocket 下載程式已啟動 v{VERSION} · Python {sys.version.split()[0]}", flush=True)
+    try:
+        runtime = Runtime()
+        if arguments.setup:
+            setup(bridge, runtime)
+        else:
             run_job(bridge, arguments.job, runtime)
-        except Exception as error:
-            print("無法啟動任務：" + safe_error(error))
-            print("請重新授權 MediaPocket 裡的 MediaPocketBridge 子資料夾，或在 App 建立新任務。")
+    except Exception as error:
+        record_startup_failure(bridge, arguments, error)
 
 
 if __name__ == "__main__":

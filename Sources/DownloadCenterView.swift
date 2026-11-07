@@ -6,6 +6,10 @@ final class DownloadCenterModel {
     var link = ""
     var quality = "1080"
     var audioOnly = false
+    var method = DownloadMethod.smgShortcut
+    var shortcutName = UserDefaults.standard.string(forKey: "smgShortcutName") ?? "SMG YouTube" {
+        didSet { UserDefaults.standard.set(shortcutName, forKey: "smgShortcutName") }
+    }
     var jobs: [DownloadJob] = []
     var setup: DownloadStatus?
     var error: String?
@@ -34,10 +38,26 @@ final class DownloadCenterModel {
         working = true
         defer { working = false }
         do {
-            let request = try await store.create(url: link, quality: quality, audioOnly: audioOnly)
+            // Validate before creating a job so an invalid shortcut name leaves no orphan.
+            if method == .smgShortcut { _ = try SMGShortcutHandoff.url(name: shortcutName, source: link) }
+            let request = try await store.create(url: link, quality: quality, audioOnly: audioOnly, method: method)
             link = ""
             await refresh()
-            await launch(DownloadStore.command(for: request.id))
+            await start(request)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func start(_ request: DownloadRequest) async {
+        do {
+            if request.executionMethod == .smgShortcut {
+                let url = try SMGShortcutHandoff.url(name: shortcutName, source: request.url)
+                guard await UIApplication.shared.open(url, options: [:]) else {
+                    error = "無法開啟捷徑 App。請確認已安裝並匯入你的 SMG 捷徑。"
+                    return
+                }
+                try await store.markShortcutHandoff(request)
+                await refresh()
+            } else { await launch(DownloadStore.command(for: request.id)) }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -57,6 +77,7 @@ final class DownloadCenterModel {
 
 struct DownloadCenterView: View {
     @Bindable var model: DownloadCenterModel
+    let sources: SourceLibraryModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSetup = false
 
@@ -66,28 +87,38 @@ struct DownloadCenterView: View {
                 TextField("貼上影片或貼文的 HTTPS 連結", text: $model.link, axis: .vertical)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .lineLimit(2...4)
-                Picker("最高畫質", selection: $model.quality) {
+                Picker("下載方式", selection: $model.method) {
+                    Text("現有 SMG 捷徑").tag(DownloadMethod.smgShortcut)
+                    Text("App FFmpeg").tag(DownloadMethod.ashell)
+                }
+                if model.method == .smgShortcut {
+                    Text("YouTube／Bilibili 交給你原本的捷徑，在捷徑中選整支、片段與畫質。請先確認設定中的捷徑名稱。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                  Picker("最高畫質", selection: $model.quality) {
                     Text("原畫質").tag("best")
                     Text("1080p").tag("1080")
                     Text("720p").tag("720")
                 }.disabled(model.audioOnly)
                 Toggle("只下載音訊", isOn: $model.audioOnly)
+                }
                 Button {
                     Task { await model.enqueue() }
                 } label: {
-                    Label("交給 a-Shell 下載", systemImage: "arrow.down.circle.fill")
-                }.disabled(model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.working || model.setup?.phase != "ready")
+                    Label(model.method == .smgShortcut ? "使用 SMG 捷徑下載" : "交給 a-Shell 下載", systemImage: "arrow.down.circle.fill")
+                }.disabled(model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.working || (model.method == .ashell && model.setup?.phase != "ready"))
             } header: { Text("新增下載") }
               footer: { Text("YouTube、Instagram 影片貼文／Reels、Threads 影片、Bilibili。解析後以 FFmpeg 下載並保留原編碼；原畫質受來源、登入與格式供應限制。") }
             Section {
                 Button { showSetup = true } label: {
-                    Label(model.setup?.phase == "ready" ? "a-Shell 已就緒・設定與更新" : "首次使用：設定免費下載工具", systemImage: "terminal")
+                    Label("捷徑名稱與免費下載設定", systemImage: "slider.horizontal.3")
                 }
-                if let setup = model.setup { Text(setup.message).font(.footnote).foregroundStyle(.secondary) }
+                DownloadOutputFolderButton(sources: sources)
+                if model.method == .ashell, let setup = model.setup { Text(setup.message).font(.footnote).foregroundStyle(.secondary) }
             }
             Section("下載任務") {
                 if model.jobs.isEmpty {
-                    Text("完成的影片會整批匯入「檔案庫 → Downloads」。").foregroundStyle(.secondary)
+                    Text("SMG 成品從已加入的來源資料夾讀取；App FFmpeg 成品在「檔案庫 → App 內檔案 → Downloads」。").foregroundStyle(.secondary)
                 }
                 ForEach(model.jobs) { job in DownloadJobRow(job: job, model: model) }
             }
@@ -96,6 +127,10 @@ struct DownloadCenterView: View {
         .toolbar { Button("重新整理", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
         .refreshable { await model.refresh() }
         .sheet(isPresented: $showSetup) { DownloadSetupView(model: model) }
+        .onChange(of: model.link) { _, link in
+            if let platform = try? DownloadPlatform.identify(link).1,
+               platform == .instagram || platform == .threads { model.method = .ashell }
+        }
         .alert("下載提示", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("知道了") { model.error = nil }
         } message: { Text(model.error ?? "") }
@@ -119,7 +154,11 @@ private struct DownloadJobRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(job.status?.title ?? job.request.platform.title).font(.headline).lineLimit(2)
             Text(job.request.url).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if let path = job.libraryPath {
+            if job.request.executionMethod == .smgShortcut {
+                Text(job.status?.message ?? "尚未交給捷徑。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button("開啟 SMG 捷徑") { Task { await model.start(job.request) } }
+            } else if let path = job.libraryPath {
                 Label("已匯入檔案庫", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text(path).font(.caption).textSelection(.enabled)
             } else {
@@ -136,6 +175,7 @@ private struct DownloadJobRow: View {
                                 model.link = job.request.url
                                 model.quality = job.request.quality
                                 model.audioOnly = job.request.audioOnly
+                                model.method = job.request.executionMethod
                                 await model.enqueue()
                             }
                         }
@@ -152,12 +192,18 @@ private struct DownloadJobRow: View {
 }
 
 private struct DownloadSetupView: View {
-    let model: DownloadCenterModel
+    @Bindable var model: DownloadCenterModel
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
-                Section("一次設定，完全免費") {
+                Section("使用你現有的 SMG 捷徑") {
+                    TextField("捷徑名稱", text: $model.shortcutName)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("預設為 SMG YouTube，須與你已匯入的捷徑名稱一致。App 傳入原始連結，保留捷徑原有的整支／片段、畫質選單和兩階段回呼。這份捷徑使用 a-Shell mini 的 Documents/v1.3.1.py，不需要先執行下方的 App FFmpeg 安裝步驟。")
+                    Text("在下載頁加入「我的 iPhone → a-Shell mini → youtube」與「bilibili」成品資料夾，或加入整個 a-Shell mini 資料夾。之後到檔案庫直接讀原檔，不複製影片。此交接不會向 App 回報完成，任務只顯示已交給捷徑。")
+                }
+                Section("App FFmpeg：首次設定") {
                     Link("安裝免費完整版 a-Shell", destination: URL(string: "https://apps.apple.com/app/a-shell/id1473805438")!)
                     Button("1. 授權下載交接資料夾") {
                         Task { await model.launch("deletemark MediaPocketBridge\npickFolder") }
@@ -166,7 +212,7 @@ private struct DownloadSetupView: View {
                     Button("2. 安裝／更新解析元件並檢查 FFmpeg") {
                         Task { await model.launch("jump MediaPocketBridge\npython3 runner.py --setup") }
                     }
-                    Text("允許下載免費 Python 套件。看到檢查完成後返回本 App；若書籤失效，重新執行步驟 1。")
+                    Text("終端應先顯示「MediaPocket 下載程式已啟動」，再顯示安裝或 yt-dlp 階段。若連第一行都沒有，代表程式尚未執行，請檢查資料夾授權與上方終端錯誤。看到檢查完成後返回本 App。")
                 }
                 Section("選填：需要登入的影片") {
                     Text("將 Netscape 格式的 Cookie 檔放進「MediaPocket → MediaPocketBridge → cookies」，命名為 youtube.txt、instagram.txt、threads.txt 或 bilibili.txt。Cookie 留在手機，不會上傳 GitHub。Threads 目前只支援可公開取得的影片貼文。")
@@ -178,5 +224,31 @@ private struct DownloadSetupView: View {
             }.navigationTitle("免費下載設定")
                 .toolbar { Button("完成") { dismiss() } }
         }
+    }
+}
+
+private struct DownloadOutputFolderButton: View {
+    let sources: SourceLibraryModel
+    @State private var showPicker = false
+    @State private var message: String?
+    var body: some View {
+        Button("加入下載成品資料夾（原位置）", systemImage: "folder.badge.plus") { showPicker = true }
+            .sheet(isPresented: $showPicker) {
+                OriginalSourcePicker(mode: .folder) { result in
+                    showPicker = false
+                    Task {
+                        do {
+                            for url in try result.get() {
+                                let added = try await sources.store.add(url)
+                                await sources.refresh()
+                                message = "已加入「\(added.name)」。到檔案庫開啟即可直接讀原檔。"
+                            }
+                        } catch { message = error.localizedDescription }
+                    }
+                }.ignoresSafeArea()
+            }
+            .alert("成品資料夾", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+                Button("知道了") { message = nil }
+            } message: { Text(message ?? "") }
     }
 }
