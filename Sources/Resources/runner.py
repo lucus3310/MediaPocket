@@ -519,11 +519,21 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                     command = engine.local_command(paths, temporary, progress, request["audioOnly"], plan) if advanced else ffmpeg_command(inputs, temporary, progress, request["audioOnly"])
                     result = runtime.run(command,
                                          slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
+                    fallback = engine.software_fallback(request, entry, encoders, plan) if result and advanced else None
+                    if fallback is not None:
+                        temporary.unlink(missing_ok=True)
+                        error_log = slot / "ffmpeg-error.txt"
+                        if error_log.exists(): error_log.replace(slot / "ffmpeg-videotoolbox-error.txt")
+                        update(phase="converting", message="VideoToolbox 無法完成，改用可用的軟體編碼器重試；不需重新下載軌道。", progress=0.8)
+                        result = runtime.run(engine.local_command(paths, temporary, progress, request["audioOnly"], fallback),
+                                             slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
                 finally:
                     stop.set()
                     watcher.join(timeout=3)
                 check_cancel()
                 if result:
+                    if advanced:
+                        raise ValueError("FFmpeg 合併／轉碼失敗，已保留軌道暫存。請改用原編碼重試，或檢查裝置編碼器及可用空間；詳細錯誤在任務資料夾的 ffmpeg-error.txt。")
                     raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
                 expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
                 verify_output(runtime, temporary, request["audioOnly"], slot, expected_audio)

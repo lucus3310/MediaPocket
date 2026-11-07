@@ -70,9 +70,9 @@ final class DownloadCenterModel {
         catch { self.error = error.localizedDescription }
     }
 
-    func retry(_ id: UUID) async {
+    func retry(_ id: UUID, original: Bool = false) async {
         do {
-            let request = try await store.retry(id)
+            let request = try await store.retry(id, original: original)
             await refresh()
             await launch(DownloadStore.command(for: request.id))
         } catch { self.error = error.localizedDescription }
@@ -203,6 +203,9 @@ private struct DownloadJobRow: View {
                 if job.status?.terminal == true || job.request.requiresSelection != true || job.status?.phase == "awaitingSelection" {
                     if job.request.selection != nil && ["failed", "cancelled"].contains(job.status?.phase ?? "") {
                         Button("重試／續傳相同任務", systemImage: "arrow.clockwise") { Task { await model.retry(job.id) } }
+                        if ![nil, "original", "auto"].contains(job.request.outputProfile) {
+                            Button("改用原編碼重試（沿用軌道暫存）") { Task { await model.retry(job.id, original: true) } }
+                        }
                     }
                     rescanButton
                 } else {

@@ -418,6 +418,28 @@ class FFmpegIntegration(unittest.TestCase):
         runner.run_job(self.bridge, job_id, self.runtime, source)
         self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "complete")
 
+    def test_videotoolbox_failure_falls_back_without_redownloading(self):
+        job_id, slot = self.request()
+        request = json.loads((slot / "request.json").read_text())
+        request.update(transferMode="fast", outputProfile="h264", connections=4)
+        runner.atomic_json(slot / "request.json", request)
+        encoders = runner.engine.encoder_set(self.runtime, slot) | {"h264_videotoolbox"}
+        real_run = self.runtime.run
+        attempts = []
+        def unavailable(arguments, stdout, stderr):
+            if "h264_videotoolbox" in arguments:
+                attempts.append("hardware")
+                Path(stderr).write_text("VideoToolbox unavailable")
+                return 1
+            if "libx264" in arguments: attempts.append("software")
+            return real_run(arguments, stdout, stderr)
+        with patch.object(runner.engine, "encoder_set", return_value=encoders), patch.object(self.runtime, "run", unavailable):
+            runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
+        status = json.loads((slot / "status.json").read_text())
+        self.assertEqual(status["phase"], "complete", status)
+        self.assertEqual(attempts, ["hardware", "software"])
+        self.assertTrue((slot / "ffmpeg-videotoolbox-error.txt").is_file())
+
     def test_high_resolution_4k60_and_8k_copy(self):
         for width, height, fps in ((3840, 2160, 60), (7680, 4320, 30)):
             source_path = self.base / f"sample-{height}.mp4"

@@ -194,6 +194,13 @@ def encoder_set(runtime, slot):
     return set(re.findall(r"^\s*[VAS][A-Z.]{5}\s+(\S+)", output.read_text(errors="replace"), re.MULTILINE))
 
 
+def software_fallback(request, entry, encoders, plan):
+    if not any(str(value).endswith("_videotoolbox") for value in plan[1]): return None
+    software = encoders - {"h264_videotoolbox", "hevc_videotoolbox"}
+    try: return output_plan(request, entry, software)
+    except ValueError: return None
+
+
 def local_command(paths, output, progress, audio_only, plan):
     _, codecs, muxer, _ = plan
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
