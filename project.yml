@@ -8,8 +8,8 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-    MARKETING_VERSION: "0.10.0"
-    CURRENT_PROJECT_VERSION: "11"
+    MARKETING_VERSION: "0.10.1"
+    CURRENT_PROJECT_VERSION: "12"
     EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 packages:
@@ -29,12 +29,18 @@ targets:
           - Resources/runner.py
           - Resources/download_engine.py
           - Resources/embedded_runner.py
+          - Resources/resolver_policy.py
+          - Resources/ResolverMediaGuard.js
           - "**/__pycache__"
       - path: Sources/Resources/runner.py
         buildPhase: resources
       - path: Sources/Resources/download_engine.py
         buildPhase: resources
       - path: Sources/Resources/embedded_runner.py
+        buildPhase: resources
+      - path: Sources/Resources/resolver_policy.py
+        buildPhase: resources
+      - path: Sources/Resources/ResolverMediaGuard.js
         buildPhase: resources
       - path: NativeSupport/MPEmbedded.c
     dependencies:

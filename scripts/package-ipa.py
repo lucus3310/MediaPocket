@@ -28,7 +28,7 @@ def package_app(app: Path, output: Path) -> None:
         'Frameworks/Python.framework/Python', 'Frameworks/ffmpegkit.framework/ffmpegkit',
         'Frameworks/_ssl.framework/_ssl', 'Frameworks/_ctypes.framework/_ctypes',
         'python/lib/python3.13/encodings/__init__.py', 'python-packages/yt_dlp/__init__.py',
-        'python-packages/certifi/cacert.pem', 'embedded_runner.py',
+        'python-packages/certifi/cacert.pem', 'embedded_runner.py', 'resolver_policy.py', 'ResolverMediaGuard.js',
         'Native-LICENSES/FFmpegKit-LICENSE.txt', 'Native-LICENSES/Python-LICENSE.txt',
     ]
     for name in required:

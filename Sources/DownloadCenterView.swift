@@ -59,6 +59,9 @@ final class DownloadCenterModel {
             await refresh()
             try await NativeDownloadEngine.run("probe", directory: store.directory, job: request.id)
             await refresh()
+            if let status = jobs.first(where: { $0.id == request.id })?.status, status.phase == "failed" {
+                error = "解析失敗：" + status.message
+            }
         } catch { self.error = error.localizedDescription }
     }
 

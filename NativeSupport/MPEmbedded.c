@@ -5,6 +5,7 @@
 #include <string.h>
 
 static MPCommandHandler command_handler;
+static MPWebViewHandler webview_handler;
 static char error_message[4096];
 static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -30,13 +31,26 @@ static PyObject *execute(PyObject *self, PyObject *arguments) {
     Py_END_ALLOW_THREADS
     return PyLong_FromLong(result);
 }
-static PyMethodDef methods[] = {{"execute", execute, METH_VARARGS, "Run the linked in-process FFmpeg engine."}, {NULL, NULL, 0, NULL}};
+static PyObject *configure_webview(PyObject *self, PyObject *arguments) {
+    unsigned long address;
+    if (!PyArg_ParseTuple(arguments, "k", &address)) return NULL;
+    Py_BEGIN_ALLOW_THREADS
+    if (webview_handler) webview_handler(address);
+    Py_END_ALLOW_THREADS
+    Py_RETURN_NONE;
+}
+static PyMethodDef methods[] = {
+    {"execute", execute, METH_VARARGS, "Run the linked in-process FFmpeg engine."},
+    {"configure_webview", configure_webview, METH_VARARGS, "Restrict resolver navigation and playback."},
+    {NULL, NULL, 0, NULL}
+};
 static struct PyModuleDef module = {PyModuleDef_HEAD_INIT, "_mediapocket", NULL, -1, methods};
 PyMODINIT_FUNC PyInit__mediapocket(void) { return PyModule_Create(&module); }
 
-int mp_python_initialize(const char *home, const char *resources, const char *packages, const char *executable, MPCommandHandler handler) {
+int mp_python_initialize(const char *home, const char *resources, const char *packages, const char *executable, MPCommandHandler handler, MPWebViewHandler view_handler) {
     pthread_mutex_lock(&init_lock);
     command_handler = handler;
+    webview_handler = view_handler;
     if (Py_IsInitialized()) { pthread_mutex_unlock(&init_lock); return 0; }
     PyPreConfig preconfig;
     PyPreConfig_InitIsolatedConfig(&preconfig);

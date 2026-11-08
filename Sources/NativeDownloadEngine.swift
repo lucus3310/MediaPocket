@@ -42,7 +42,7 @@ enum NativeDownloadEngine {
                     }
                     let initialized = mp_python_initialize(resources + "/python", resources,
                                                            resources + "/python-packages", executable,
-                                                           nativeMediaCommand)
+                                                           nativeMediaCommand, configureResolverWebView)
                     guard initialized == 0 else {
                         throw NativeEngineError.failure(String(cString: mp_python_error()))
                     }
