@@ -85,21 +85,47 @@ struct DownloadCenterView: View {
     let library: MediaLibrary
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSetup = false
+    @FocusState private var linkFocused: Bool
+
+    private var ready: Bool { model.setup?.phase == "ready" }
 
     var body: some View {
         List {
             Section {
-                TextField("貼上影片或貼文的 HTTPS 連結", text: $model.link, axis: .vertical)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .lineLimit(2...4)
-                Button { Task { await model.scan() } } label: {
-                    Label("取得可用畫質", systemImage: "list.bullet.rectangle")
-                }.disabled(model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.working || model.setup?.phase != "ready")
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("貼上影片或貼文的 HTTPS 連結", text: $model.link, axis: .vertical)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .lineLimit(2...4)
+                        .focused($linkFocused)
+                        .submitLabel(.done)
+                        .onSubmit { linkFocused = false }
+                        .accessibilityIdentifier("downloadLink")
+                    if linkFocused {
+                        HStack {
+                            Spacer()
+                            Button("收起鍵盤", systemImage: "keyboard.chevron.compact.down") { linkFocused = false }
+                                .font(.subheadline)
+                                .accessibilityIdentifier("dismissDownloadKeyboard")
+                        }.buttonStyle(.borderless)
+                    }
+                }
+                Button {
+                    linkFocused = false
+                    if ready { Task { await model.scan() } }
+                    else { showSetup = true }
+                } label: {
+                    Label(ready ? "取得可用畫質" : "先完成下載設定", systemImage: ready ? "list.bullet.rectangle" : "gearshape")
+                }
+                .accessibilityIdentifier("downloadPrimaryAction")
+                .disabled(model.working || (ready && model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             } header: { Text("貼上連結") }
-              footer: { Text("先解析，再回 App 選擇解析度、fps、編碼與輸出格式。來源有提供時可取 4K／8K 及更高原畫質，不升頻、不放大冒充高畫質。") }
-            if model.setup?.phase != "ready" {
+              footer: { Text(ready ? "先解析，再回 App 選擇來源畫質與儲存格式，按「開始下載與合併」。" : "下一步：按「先完成下載設定」，完成資料夾授權及元件檢查。你貼上的連結會保留，不必重貼。") }
+            if !ready {
                 Section {
-                    Button { showSetup = true } label: {
+                    Text("尚未確認下載工具就緒").font(.headline)
+                    Text("先完成「授權交接資料夾」與「安裝／檢查元件」兩個步驟，再返回取得畫質。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Button { linkFocused = false; showSetup = true } label: {
                         Label("首次使用：設定免費下載工具", systemImage: "terminal")
                     }
                     if let setup = model.setup { Text(setup.message).font(.footnote).foregroundStyle(.secondary) }
@@ -115,10 +141,18 @@ struct DownloadCenterView: View {
             Section { DownloadOutputFolderButton(sources: sources) }
         }
         .navigationTitle("下載")
+        .scrollDismissesKeyboard(.interactively)
         .navigationDestination(for: String.self) { LibraryFolderView(library: library, path: $0) }
         .toolbar {
-            Button("下載設定", systemImage: "gearshape") { showSetup = true }
-            Button("重新整理", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("下載設定", systemImage: "gearshape") { linkFocused = false; showSetup = true }
+                Button("重新整理", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("收起鍵盤", systemImage: "keyboard.chevron.compact.down") { linkFocused = false }
+                    .accessibilityIdentifier("dismissDownloadKeyboardAccessory")
+            }
         }
         .refreshable { await model.refresh() }
         .sheet(isPresented: $showSetup) { DownloadSetupView(model: model) }
@@ -175,7 +209,12 @@ private struct DownloadJobRow: View {
                 }
             } else if job.status?.phase == "awaitingSelection", let catalog = job.catalog {
                 Button { showFormats = true } label: {
-                    LabeledContent("來源畫質", value: option?.label ?? "選擇格式").multilineTextAlignment(.trailing)
+                    HStack {
+                        Text("來源畫質")
+                        Spacer()
+                        Text(option?.label ?? "選擇格式").foregroundStyle(.tint).multilineTextAlignment(.trailing)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
+                    }
                 }.sheet(isPresented: $showFormats) { DownloadFormatSheet(catalog: catalog, selected: $selected) }
                 if let size = option?.estimatedBytes {
                     Text("預估來源大小：約 \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")

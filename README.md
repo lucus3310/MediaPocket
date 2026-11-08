@@ -2,7 +2,9 @@
 
 以 SwiftUI 製作的個人 iPhone 影音工具。目標是整合本機檔案管理、多格式播放，以及透過 FFmpeg 處理平台影音下載。
 
-目前版本 **0.9.0**：在 App 貼連結，解析後可按解析度、fps、編碼篩選來源，選輸出格式，再交由本機 a-Shell 的 yt-dlp 與 FFmpeg 下載、合併及需要時轉碼，完成後直接管理／播放。不需要任何捷徑或付費服務。保留原位置檔案管理、來源資料夾書籤、逐幀、8 倍縮放及雙播放引擎。見 [0.9 試用步驟](docs/tryout-v0.9.md) 與 [技術方案研究](docs/download-architecture-v0.9.md)。
+目前版本 **0.9.1** 修正下載頁的鍵盤收合及初次設定指引：輸入框旁與鍵盤工具列提供收合按鈕，未就緒時主要動作直接開啟設定，連結保留。見 [0.9.1 操作步驟](docs/tryout-v0.9.1.md)。
+
+下載功能沿用 0.9：在 App 貼連結，解析後可按解析度、fps、編碼篩選來源，選輸出格式，再交由本機 a-Shell 的 yt-dlp 與 FFmpeg 下載、合併及需要時轉碼，完成後直接管理／播放。不需要任何捷徑或付費服務。保留原位置檔案管理、來源資料夾書籤、逐幀、8 倍縮放及雙播放引擎。見 [0.9 試用步驟](docs/tryout-v0.9.md) 與 [技術方案研究](docs/download-architecture-v0.9.md)。
 
 新增來源格式細項（4K／8K、不同 fps、H.264／HEVC／VP9／AV1、HDR，只有來源實際提供才出現），支援 YouTube、Instagram、Threads、Bilibili、TikTok、X／Twitter、Vimeo、Dailymotion。原畫質模式不設 1080p 或 4K 上限，不放大或補幀冒充來源品質；固定格式失效時不自動降級。輸出可選自動無損 MP4／MKV、MKV／MKA 原編碼、MP4 相容轉碼／H.264／HEVC、相容原編碼 WebM，以及 M4A／MP3／FLAC／WAV。轉碼會視 FFmpeg 編碼器能力先選 VideoToolbox，再選可用軟體編碼器；不保證每個硬體或 build 都有每種編碼器。HDR 需保留原編碼，避免沒有 tone mapping 的轉碼破壞色彩。
 
