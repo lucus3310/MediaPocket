@@ -13,7 +13,11 @@ static void remember_error(void) {
     PyErr_Fetch(&type, &value, &trace);
     PyErr_NormalizeException(&type, &value, &trace);
     PyObject *text = value ? PyObject_Str(value) : NULL;
-    snprintf(error_message, sizeof(error_message), "%s", text ? PyUnicode_AsUTF8(text) : "Embedded Python error");
+    PyObject *name = type ? PyObject_GetAttrString(type, "__name__") : NULL;
+    const char *detail = text ? PyUnicode_AsUTF8(text) : NULL;
+    const char *kind = name ? PyUnicode_AsUTF8(name) : "Embedded Python error";
+    snprintf(error_message, sizeof(error_message), "%s: %s", kind ? kind : "Python error", detail && detail[0] ? detail : "operation failed");
+    Py_XDECREF(name);
     Py_XDECREF(text); Py_XDECREF(type); Py_XDECREF(value); Py_XDECREF(trace);
 }
 

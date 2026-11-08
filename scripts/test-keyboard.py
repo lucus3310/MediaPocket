@@ -1,4 +1,4 @@
-"""Exercise the real iOS software keyboard and setup CTA using XCUITest."""
+"""Exercise the real iOS software keyboard and built-in engine settings."""
 import json
 from pathlib import Path
 import subprocess
@@ -30,5 +30,5 @@ run('xcrun', 'xcresulttool', 'export', 'attachments', '--path', 'build/KeyboardT
 Path('build/artifacts/keyboard-tests.json').write_text(json.dumps({
     'passed': True, 'device': device['name'], 'physicalIphone': False,
     'checks': ['software keyboard shown', 'visible dismissal button', 'keyboard closed twice',
-               'input URL retained', 'unconfigured primary action opens setup', 'two setup actions visible'],
+               'input URL retained', 'native engine ready', 'built-in engine settings visible', 'no external setup actions'],
 }, indent=2) + '\n')

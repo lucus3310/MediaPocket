@@ -12,6 +12,7 @@ import runner
 
 os.environ['SSL_CERT_FILE'] = certifi.where()
 os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+_plugins_loaded = False
 
 
 class NativeRuntime:
@@ -23,13 +24,16 @@ class NativeRuntime:
 
 
 def health(root, runtime):
+    global _plugins_loaded
     status = dict(phase='initializing', message='正在檢查內建 FFmpeg 與解析器…', token='native', updated=time.time())
     runner.atomic_json(root / 'native-engine.json', status)
     try:
         for module in ('ssl', 'ctypes', 'yt_dlp', 'yt_dlp_ejs'):
             importlib.import_module(module)
         from yt_dlp.plugins import load_all_plugins
-        load_all_plugins()
+        if not _plugins_loaded:
+            load_all_plugins()
+            _plugins_loaded = True
         for module in ('yt_dlp_plugins.extractor.threads', 'yt_dlp_plugins.extractor.webkit_jsi', 'yt_dlp_plugins.extractor.ytjsc'):
             importlib.import_module(module)
         if runtime.run(['ffmpeg', '-hide_banner', '-encoders'], root / 'native-encoders.txt', root / 'native-error.txt'):

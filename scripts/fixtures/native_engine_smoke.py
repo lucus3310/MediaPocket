@@ -18,7 +18,9 @@ def smoke(root, runtime):
     # Calls UIKit/WebKit through ctypes on the actual iOS runtime, not a mock.
     with WKJSE_Factory(DefaultLoggerImpl()) as send:
         with WKJSE_Webview(send) as webview:
-            assert webview.execute_js('1 + 2') == 3
+            # execute_js passes a function BODY to callAsyncJavaScript; unlike
+            # evaluateJavaScript, a bare expression does not return a value.
+            assert webview.execute_js('return 1 + 2;') == 3, 'WebKit function did not return 3'
 
     root.mkdir(parents=True, exist_ok=True)
     def command(arguments, name):

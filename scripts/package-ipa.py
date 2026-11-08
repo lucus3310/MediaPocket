@@ -24,6 +24,20 @@ def package_app(app: Path, output: Path) -> None:
     executable = app / info["CFBundleExecutable"]
     if not executable.is_file():
         raise ValueError("The application executable is missing")
+    required = [
+        'Frameworks/Python.framework/Python', 'Frameworks/ffmpegkit.framework/ffmpegkit',
+        'Frameworks/_ssl.framework/_ssl', 'Frameworks/_ctypes.framework/_ctypes',
+        'python/lib/python3.13/encodings/__init__.py', 'python-packages/yt_dlp/__init__.py',
+        'python-packages/certifi/cacert.pem', 'embedded_runner.py',
+        'Native-LICENSES/FFmpegKit-LICENSE.txt', 'Native-LICENSES/Python-LICENSE.txt',
+    ]
+    for name in required:
+        if not (app / name).is_file():
+            raise ValueError('Incomplete embedded engine: ' + name)
+    if list(app.rglob('*.so')):
+        raise ValueError('Python binary extension was not converted to an iOS framework')
+    if (app / 'native_engine_smoke.py').exists():
+        raise ValueError('Debug download fixture must not ship in the device release')
 
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +69,8 @@ def package_app(app: Path, output: Path) -> None:
         "signed": False,
         "sha256": checksum,
         "bytes": output.stat().st_size,
+        "downloadEngine": "embedded CPython + yt-dlp + native FFmpeg; in-process",
+        "externalAppRequired": False,
     }
     output.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metadata, indent=2))
