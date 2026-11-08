@@ -21,16 +21,14 @@ final class ResolverWebViewPolicy: NSObject, WKNavigationDelegate, WKUIDelegate 
         }
     }
 
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         // Preserve WebKit's empty document and solver-created empty frames.
         // No web URL, app scheme, file or media URL is permitted to navigate.
         if navigationAction.request.url?.scheme == "about" {
-            decisionHandler(.allow)
-            return
+            return .allow
         }
         blockedNavigations += 1
-        decisionHandler(.cancel)
+        return .cancel
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
