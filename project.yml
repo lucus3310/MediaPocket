@@ -8,10 +8,13 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-    MARKETING_VERSION: "0.9.1"
-    CURRENT_PROJECT_VERSION: "10"
+    MARKETING_VERSION: "0.10.0"
+    CURRENT_PROJECT_VERSION: "11"
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 packages:
+  NativeFFmpeg:
+    path: build/native/FFmpegKit
   VLCKit:
     url: https://github.com/videolan/vlckit.git
     revision: 6629ecb91e7e05e6b3fcbf77b17d0421cff37923
@@ -25,12 +28,20 @@ targets:
           - Info.plist
           - Resources/runner.py
           - Resources/download_engine.py
+          - Resources/embedded_runner.py
           - "**/__pycache__"
       - path: Sources/Resources/runner.py
         buildPhase: resources
       - path: Sources/Resources/download_engine.py
         buildPhase: resources
+      - path: Sources/Resources/embedded_runner.py
+        buildPhase: resources
+      - path: NativeSupport/MPEmbedded.c
     dependencies:
+      - package: NativeFFmpeg
+        product: ffmpegkit
+      - framework: build/native/Python.xcframework
+        embed: true
       - package: VLCKit
         product: VLCKit
     settings:
@@ -41,6 +52,13 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: NativeSupport/include/MPEmbedded.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        OTHER_LDFLAGS: ["$(inherited)", "-Wl,-needed_framework,ffmpegkit"]
+    postBuildScripts:
+      - name: Embed Python standard library and extension frameworks
+        script: python3 "$PROJECT_DIR/scripts/embed-python.py"
+        basedOnDependencyAnalysis: false
   MediaPocketPlaybackTests:
     type: bundle.unit-test
     platform: iOS

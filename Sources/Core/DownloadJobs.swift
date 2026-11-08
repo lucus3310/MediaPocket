@@ -73,8 +73,8 @@ enum DownloadError: LocalizedError {
     }
 }
 
-// smgShortcut is decode-only compatibility for v0.7 records; no execution path.
-enum DownloadMethod: String, Codable, Sendable { case smgShortcut, ashell }
+// External methods are decode-only compatibility; all new jobs run in-process.
+enum DownloadMethod: String, Codable, Sendable { case native, smgShortcut, ashell }
 
 struct DownloadOption: Codable, Identifiable, Sendable {
     let id: String
@@ -147,16 +147,29 @@ actor DownloadStore {
         self.library = library
     }
 
-    func prepare(runner: URL, engine: URL? = nil) throws {
+    func prepare() throws {
         try files.createDirectory(at: directory.appending(path: "jobs"), withIntermediateDirectories: true)
         try files.createDirectory(at: directory.appending(path: "cookies"), withIntermediateDirectories: true)
-        let destination = directory.appending(path: "runner.py")
-        let data = try Data(contentsOf: runner)
-        if (try? Data(contentsOf: destination)) != data { try data.write(to: destination, options: .atomic) }
-        if let engine {
-            let support = directory.appending(path: "download_engine.py")
-            let engineData = try Data(contentsOf: engine)
-            if (try? Data(contentsOf: support)) != engineData { try engineData.write(to: support, options: .atomic) }
+    }
+
+    // Called once after a process launch, before any engine work is scheduled.
+    // Killed/suspended processes leave resumable tracks, never a live worker.
+    func recoverInterrupted() throws {
+        let root = directory.appending(path: "jobs")
+        for slot in try files.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey]) {
+            guard try slot.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
+                  let data = try? Data(contentsOf: slot.appending(path: "request.json")),
+                  let request = try? JSONDecoder().decode(DownloadRequest.self, from: data),
+                  request.executionMethod == .native else { continue }
+            let path = slot.appending(path: "status.json")
+            guard let previous = try? Data(contentsOf: path),
+                  var status = try? JSONDecoder().decode(DownloadStatus.self, from: previous),
+                  status.token == request.token, !status.terminal, status.phase != "awaitingSelection" else { continue }
+            status.phase = "failed"
+            status.message = "上次任務已中斷，可重試／續傳；已保留軌道暫存。"
+            status.progress = nil
+            status.updated = Date().timeIntervalSince1970
+            try JSONEncoder().encode(status).write(to: path, options: .atomic)
         }
     }
 
@@ -165,7 +178,7 @@ actor DownloadStore {
         let request = DownloadRequest(id: UUID(), token: UUID().uuidString,
                                       url: source.absoluteString, platform: platform,
                                       quality: ["best", "1080", "720"].contains(quality) ? quality : "1080",
-                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970, method: .ashell, requiresSelection: requiresSelection,
+                                      audioOnly: audioOnly, created: Date().timeIntervalSince1970, method: .native, requiresSelection: requiresSelection,
                                       transferMode: fast ? "fast" : nil, connections: fast ? 4 : nil)
         let slot = jobDirectory(request.id)
         try files.createDirectory(at: slot, withIntermediateDirectories: true)
@@ -187,7 +200,7 @@ actor DownloadStore {
             if status?.token != request.token { status = nil }
             let receipt = slot.appending(path: "imported.json")
             var path = (try? Data(contentsOf: receipt)).flatMap { try? JSONDecoder().decode(String.self, from: $0) }
-            if request.executionMethod == .ashell, path == nil, let current = status, current.phase == "complete", let outputs = current.outputs {
+            if request.executionMethod != .smgShortcut, path == nil, let current = status, current.phase == "complete", let outputs = current.outputs {
                 do {
                     path = try await library.acceptDownload(from: slot.appending(path: "output"), id: id, outputs: outputs)
                     try JSONEncoder().encode(path!).write(to: receipt, options: .atomic)
@@ -209,7 +222,7 @@ actor DownloadStore {
         let slot = jobDirectory(id)
         var request = try JSONDecoder().decode(DownloadRequest.self, from: Data(contentsOf: slot.appending(path: "request.json")))
         let status = try JSONDecoder().decode(DownloadStatus.self, from: Data(contentsOf: slot.appending(path: "status.json")))
-        guard request.id == id, request.executionMethod == .ashell, request.requiresSelection == true,
+        guard request.id == id, request.executionMethod == .native, request.requiresSelection == true,
               status.phase == "awaitingSelection", status.token == request.token,
               !files.fileExists(atPath: slot.appending(path: "cancel").path),
               !files.fileExists(atPath: slot.appending(path: "imported.json").path) else { throw DownloadError.invalidSelection }
@@ -223,7 +236,7 @@ actor DownloadStore {
         if let fast { request.transferMode = fast ? "fast" : nil }
         request.connections = connections
         try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
-        let queued = DownloadStatus(phase: "queued", message: "已選擇 \(option.label)，等待 a-Shell 開始下載。", token: request.token, updated: Date().timeIntervalSince1970)
+        let queued = DownloadStatus(phase: "queued", message: "已選擇 \(option.label)，準備在 App 內下載。", token: request.token, updated: Date().timeIntervalSince1970)
         try JSONEncoder().encode(queued).write(to: slot.appending(path: "status.json"), options: .atomic)
         return request
     }
@@ -232,7 +245,7 @@ actor DownloadStore {
         let slot = jobDirectory(id)
         var request = try JSONDecoder().decode(DownloadRequest.self, from: Data(contentsOf: slot.appending(path: "request.json")))
         let status = try JSONDecoder().decode(DownloadStatus.self, from: Data(contentsOf: slot.appending(path: "status.json")))
-        guard request.id == id, request.executionMethod == .ashell, request.selection != nil,
+        guard request.id == id, request.executionMethod == .native, request.selection != nil,
               status.token == request.token, ["failed", "cancelled"].contains(status.phase),
               !files.fileExists(atPath: slot.appending(path: "imported.json").path) else { throw DownloadError.invalidSelection }
         request.attempt = (request.attempt ?? 0) + 1
@@ -256,18 +269,8 @@ actor DownloadStore {
     }
 
     func setupStatus() -> DownloadStatus? {
-        guard let data = try? Data(contentsOf: directory.appending(path: "setup.json")) else { return nil }
+        guard let data = try? Data(contentsOf: directory.appending(path: "native-engine.json")) else { return nil }
         return try? JSONDecoder().decode(DownloadStatus.self, from: data)
-    }
-
-    static func shellURL(command: String) -> URL? {
-        let encoded = command.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
-        return encoded.flatMap { URL(string: "ashell://" + $0) }
-    }
-
-    static func command(for id: UUID, probe: Bool = false) -> String {
-        // a-Shell's URL entry point splits commands on newlines, not semicolons.
-        "jump MediaPocketBridge\npython3 runner.py \(probe ? "--probe" : "--job") \(id.uuidString)"
     }
 
     private func jobDirectory(_ id: UUID) -> URL {

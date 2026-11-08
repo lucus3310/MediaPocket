@@ -2,6 +2,47 @@ import Foundation
 import Testing
 @testable import MediaPocketCore
 
+@Test("Native process interruption becomes retryable while selection and track bytes survive")
+func nativeInterruptionRecovery() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let store = DownloadStore(directory: base, library: MediaLibrary(directory: base.appending(path: "Media")))
+    try await store.prepare()
+    let request = try await store.create(url: "https://youtu.be/fixture", requiresSelection: true)
+    let slot = base.appending(path: "jobs/\(request.id.uuidString)")
+    let catalog = DownloadCatalog(schema: 1, token: request.token, title: "Fixture", options: [DownloadOption(id: "video:720", label: "720p", audioOnly: false)])
+    try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
+    try JSONEncoder().encode(DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)).write(to: slot.appending(path: "status.json"))
+    try await store.recoverInterrupted()
+    #expect(try await store.jobs().first?.status?.phase == "awaitingSelection")
+    _ = try await store.select(request.id, optionID: "video:720")
+    let partial = slot.appending(path: "track.part")
+    try Data("partial".utf8).write(to: partial)
+    try await store.recoverInterrupted()
+    #expect(try await store.jobs().first?.status?.phase == "failed")
+    let retry = try await store.retry(request.id)
+    #expect(retry.selection == "video:720" && retry.attempt == 1 && retry.executionMethod == .native)
+    #expect(try Data(contentsOf: partial) == Data("partial".utf8))
+}
+
+@Test("Native completed output is moved into the existing library once")
+func nativeCompletedJobImport() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let library = MediaLibrary(directory: base.appending(path: "Media"))
+    let store = DownloadStore(directory: base.appending(path: "Jobs"), library: library)
+    let request = try await store.create(url: "https://youtu.be/fixture")
+    let slot = base.appending(path: "Jobs/jobs/\(request.id.uuidString)")
+    let output = slot.appending(path: "output")
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    try Data("validated fixture".utf8).write(to: output.appending(path: "001.mp4"))
+    try JSONEncoder().encode(DownloadStatus(phase: "complete", message: "Done", outputs: ["001.mp4"], token: request.token, updated: 1)).write(to: slot.appending(path: "status.json"))
+    let first = try #require(try await store.jobs().first?.libraryPath)
+    #expect(try await store.jobs().first?.libraryPath == first)
+    #expect(try await library.items(in: first).map(\.name) == ["001.mp4"])
+    #expect(!FileManager.default.fileExists(atPath: output.path))
+}
+
 @Test("App selection survives restart, rejects unoffered options and queues without importing media")
 func catalogSelectionPersistence() async throws {
     let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -18,7 +59,7 @@ func catalogSelectionPersistence() async throws {
     let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", token: request.token, updated: 1)
     try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
     let restored = try #require(try await store.jobs().first)
-    #expect(restored.request.executionMethod == .ashell)
+    #expect(restored.request.executionMethod == .native)
     #expect(restored.catalog?.options.map(\.id) == ["video:1080", "audio:best"])
     #expect(restored.status?.phase == "awaitingSelection")
     #expect(restored.status?.terminal == false)
@@ -29,8 +70,7 @@ func catalogSelectionPersistence() async throws {
     let queued = try #require(try await store.jobs().first)
     #expect(queued.status?.phase == "queued" && queued.libraryPath == nil)
     await #expect(throws: (any Error).self) { try await store.select(request.id, optionID: "video:1080") }
-    let command = DownloadStore.command(for: request.id, probe: true)
-    #expect(command.contains("--probe") && !command.contains("a+b"))
+    #expect(selected.executionMethod == .native)
 }
 
 @Test("Pre-catalog and retired Shortcut jobs remain readable without executing a Shortcut")
@@ -135,23 +175,15 @@ func acceptedDownloadURL(_ entry: (String, DownloadPlatform)) throws {
     #expect(try DownloadPlatform.identify(entry.0).1 == entry.1)
 }
 
-@Test("Bridge contains only a UUID in its shell command, and persists a safe request")
+@Test("Native request persists safely without copying executable scripts into Documents")
 func persistedRequest() async throws {
     let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: base) }
-    let library = MediaLibrary(directory: base.appending(path: "Media"))
-    let store = DownloadStore(directory: base.appending(path: "Bridge"), library: library)
-    let runner = base.appending(path: "runner.py")
-    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-    try Data("# test".utf8).write(to: runner)
-    try await store.prepare(runner: runner)
+    let store = DownloadStore(directory: base.appending(path: "Bridge"), library: MediaLibrary(directory: base.appending(path: "Media")))
+    try await store.prepare()
     let request = try await store.create(url: "https://youtu.be/abc?x=%27%3B%20echo%20secret", quality: "720", audioOnly: true)
-    let command = DownloadStore.command(for: request.id)
-    #expect(!command.contains("secret"))
-    #expect(command.hasSuffix(request.id.uuidString))
-    #expect(command.split(separator: "\n").count == 2)
-    #expect(!command.contains(";"))
-    #expect(DownloadStore.shellURL(command: command)?.absoluteString.contains(" ") == false)
+    #expect(request.executionMethod == .native)
+    #expect(!FileManager.default.fileExists(atPath: base.appending(path: "Bridge/runner.py").path))
     let jobs = try await store.jobs()
     #expect(jobs.count == 1)
     #expect(jobs.first?.request.audioOnly == true)

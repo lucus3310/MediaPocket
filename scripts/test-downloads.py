@@ -107,31 +107,24 @@ class Contracts(unittest.TestCase):
         inputs = runner.inputs_for({"url": "https://cdn.test/video.mp4", "protocol": "https", "acodec": "aac"}, YDL(), False)
         self.assertEqual(inputs[0][2]["Cookie"], "session=local")
 
-    def test_native_runtime_quotes_untrusted_arguments(self):
-        import shlex
-        runtime = runner.Runtime()
+    def test_embedded_runtime_passes_argv_without_shell_interpolation(self):
+        import types
         captured = []
-        runtime.native = lambda command: captured.append(command.decode()) or 0
-        runtime.fork = lambda: 7
-        runtime.wait_full = lambda pid, status, options: pid
-        runtime.release = lambda pid: None
-        url = "https://cdn.test/file?x=';echo SECRET&y=1"
-        runtime.run(["ffmpeg", "-i", url, "a file.mkv"], "stdout file", "stderr file")
-        self.assertEqual(shlex.split(captured[0]), ["ffmpeg", "-i", url, "a file.mkv", ">", "stdout file", "2>", "stderr file"])
+        binding = types.SimpleNamespace(execute=lambda *args: captured.append(args) or 37)
+        fake_certifi = types.SimpleNamespace(where=lambda: '/bundled/cacert.pem')
+        spec = importlib.util.spec_from_file_location('embedded_under_test', ROOT / 'Sources/Resources/embedded_runner.py')
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {'_mediapocket': binding, 'certifi': fake_certifi}):
+            spec.loader.exec_module(module)
+        arguments = ['ffmpeg', '-i', "https://cdn.test/?x=';echo SECRET&y=1", 'a file.mkv']
+        self.assertEqual(module.NativeRuntime().run(arguments, 'out', 'err'), 37)
+        self.assertEqual(json.loads(captured[0][0]), arguments)
+        self.assertEqual(captured[0][1:], ('out', 'err'))
 
-    def test_native_runtime_waits_and_returns_child_exit_status(self):
-        runtime = runner.Runtime()
-        events = []
-        runtime.fork = lambda: events.append("fork") or 7
-        runtime.native = lambda command: events.append("dispatch") or 0
-        def wait(pid, status, options):
-            events.append("wait")
-            status._obj.value = 37 << 8
-            return pid
-        runtime.wait_full = wait
-        runtime.release = lambda pid: events.append("release")
-        self.assertEqual(runtime.call_native("ffmpeg -version"), 37)
-        self.assertEqual(events, ["fork", "dispatch", "wait", "release"])
+    def test_ios_cannot_fall_back_to_desktop_subprocess(self):
+        with patch.object(sys, 'platform', 'ios'):
+            with self.assertRaisesRegex(RuntimeError, 'embedded FFmpeg'):
+                runner.Runtime()
 
     def test_threads_selects_target_and_refuses_ambiguous_share(self):
         from yt_dlp import YoutubeDL

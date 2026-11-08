@@ -42,12 +42,13 @@ final class DownloadKeyboardUITests: XCTestCase {
         add(after)
 
         let action = app.buttons["downloadPrimaryAction"]
-        XCTAssertTrue(action.isEnabled)
-        XCTAssertTrue(action.label.contains("先完成下載設定"))
-        action.tap()
-        XCTAssertTrue(app.navigationBars["免費下載設定"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["1. 授權下載交接資料夾"].exists)
-        XCTAssertTrue(app.buttons["2. 安裝／更新解析元件並檢查 FFmpeg"].exists)
+        let ready = NSPredicate(format: "enabled == true AND label CONTAINS %@", "取得可用畫質")
+        expectation(for: ready, evaluatedWith: action)
+        waitForExpectations(timeout: 30)
+        app.buttons["下載設定"].tap()
+        XCTAssertTrue(app.navigationBars["下載設定"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["內建 FFmpeg 已就緒"].exists)
+        XCTAssertFalse(app.buttons["1. 授權下載交接資料夾"].exists)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
     }
 }

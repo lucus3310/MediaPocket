@@ -342,8 +342,8 @@ private func saveDockReview() async throws {
     try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
     let status = DownloadStatus(phase: "awaitingSelection", message: "Choose", title: catalog.title, token: request.token, updated: 1)
     try JSONEncoder().encode(status).write(to: slot.appending(path: "status.json"))
-    let setup = DownloadStatus(phase: "ready", message: "Offline test fixture", token: "setup", updated: 1)
-    try JSONEncoder().encode(setup).write(to: folder.appending(path: "DownloadFixture/setup.json"))
+    let setup = DownloadStatus(phase: "ready", message: "Offline test fixture", token: "native", updated: 1)
+    try JSONEncoder().encode(setup).write(to: folder.appending(path: "DownloadFixture/native-engine.json"))
     await downloads.refresh()
     try await Task.sleep(for: .milliseconds(250))
     let selectionImage = renderer.image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }

@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""MediaPocket a-Shell companion. Extract with yt-dlp; transfer with FFmpeg.
-
-No subprocess is created on iOS: commands use a-Shell's in-process ios_system.
-The only IPC inputs are a local request JSON and a validated UUID argument.
+"""Shared yt-dlp orchestration. iOS supplies an in-process FFmpeg runtime.
+Desktop subprocess execution exists exclusively for command-line fixtures.
 """
 from __future__ import annotations
 
 import argparse
 import contextlib
-import ctypes
 import importlib
 import json
 import math
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 import threading
@@ -24,7 +20,7 @@ from urllib.parse import parse_qs, quote, urlparse
 import uuid
 import download_engine as engine
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -66,100 +62,34 @@ def platform_for(url):
 
 
 class Runtime:
+    """Desktop fixture runner only. iOS always supplies NativeRuntime."""
     def __init__(self):
-        self.native = None
-        if os.name != "posix":
-            return
-        try:
-            library = ctypes.CDLL(None)
-            self.native = library.ios_system
-            self.native.argtypes = [ctypes.c_char_p]
-            self.native.restype = ctypes.c_int
-        except (AttributeError, OSError):
-            return
-        # a-Shell disables joinMainThread for its UI. Nested ios_system calls
-        # can therefore return before FFmpeg finishes. Match the official
-        # ios_fork -> ios_system -> ios_full_waitpid lifecycle, including status.
-        self.fork = library.ios_fork
-        self.fork.argtypes = []
-        self.fork.restype = ctypes.c_int
-        self.wait_full = library.ios_full_waitpid
-        self.wait_full.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
-        self.wait_full.restype = ctypes.c_int
-        self.release = library.ios_releaseThreadId
-        self.release.argtypes = [ctypes.c_int]
-        self.release.restype = None
-
-    def call_native(self, command):
-        pid = self.fork()
-        if pid <= 0:
-            raise RuntimeError("a-Shell 無法配置原生指令執行緒，請關閉其他任務後重試。")
-        try:
-            immediate = self.native(command.encode("utf-8"))
-            status = ctypes.c_int(0)
-            if self.wait_full(pid, ctypes.byref(status), 0) < 0:
-                raise RuntimeError("a-Shell 未能等待 FFmpeg 結束，未匯入輸出。")
-            # waitpid status uses POSIX encoding, including termination signals.
-            code = (status.value >> 8) & 255 if not (status.value & 127) else 128 + (status.value & 127)
-            return code or immediate
-        finally:
-            self.release(pid)
+        if sys.platform == "ios":
+            raise RuntimeError("iOS requires the embedded FFmpeg bridge")
 
     def run(self, arguments, stdout, stderr):
-        # Never interpolate a URL into an unquoted shell command. Only the native
-        # a-Shell path needs a command string; desktop tests use argv directly.
-        if self.native:
-            command = shlex.join([str(arg) for arg in arguments])
-            command += " > " + shlex.quote(str(stdout)) + " 2> " + shlex.quote(str(stderr))
-            return self.call_native(command)
         with open(stdout, "wb") as out, open(stderr, "wb") as err:
             return subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                   timeout=3600, check=False).returncode
 
     def callback(self, job_id=None, token=None):
-        if not self.native:
-            return
-        callback = "mediapocket://complete"
-        if job_id:
-            callback += "?id=" + quote(job_id) + "&token=" + quote(token or "")
-        self.call_native("openurl " + shlex.quote(callback))
+        pass
 
 
 def setup(bridge, runtime):
-    status = {"phase": "installing", "message": "正在安裝免費解析元件…", "token": "setup", "updated": time.time()}
+    # Desktop diagnostics only; the app's health check is embedded_runner.health.
+    status = dict(phase="ready", message="Desktop fixture runtime ready", token="setup", updated=time.time())
+    for command in ("ffmpeg", "ffprobe"):
+        if runtime.run([command, "-version"], bridge / (command + "-version.txt"), bridge / "setup-error.txt"):
+            status.update(phase="failed", message=command + " unavailable")
     atomic_json(bridge / "setup.json", status)
-    print("[MediaPocket] 安裝／更新 yt-dlp 與解析元件…", flush=True)
-    try:
-        if sys.version_info < (3, 11):
-            raise ValueError("請先在 App Store 更新完整版 a-Shell；需要 Python 3.11 以上。")
-        from pip._internal.cli.main import main as pip_main
-        result = pip_main(["install", "--upgrade", "--only-binary=:all:", "--disable-pip-version-check",
-                           "--no-input", *PACKAGES])
-        if result:
-            raise ValueError("Python 套件安裝未完成，請檢查 a-Shell 終端訊息與網路後重試。")
-        importlib.invalidate_caches()
-        from yt_dlp.plugins import load_all_plugins
-        load_all_plugins()
-        for module in ("yt_dlp", "yt_dlp_ejs", "yt_dlp_plugins.extractor.threads", "yt_dlp_plugins.extractor.webkit_jsi"):
-            importlib.import_module(module)
-        importlib.import_module("yt_dlp_plugins.extractor.ytjsc")
-        for command in ("ffmpeg", "ffprobe"):
-            if runtime.run([command, "-version"], bridge / (command + "-version.txt"), bridge / "setup-error.txt"):
-                raise ValueError(f"找不到可運作的 {command}，請更新完整版 a-Shell。")
-        status.update(phase="ready", message=f"下載工具 {VERSION} 已就緒：FFmpeg、ffprobe 與四平台解析元件。")
-    except Exception as error:
-        status.update(phase="failed", message=safe_error(error))
-    status["updated"] = time.time()
-    atomic_json(bridge / "setup.json", status)
-    print(status["message"])
-    runtime.callback()
 
 
 def safe_error(error):
     # Source/CDN URLs can contain session tokens. Keep them out of UI status.
     text = re.sub(r"https?://\S+", "[來源網址]", str(error))
     text = re.sub(r"(?i)(cookie|authorization)\s*[:=][^\n]+", r"\1: [已隱藏]", text)
-    return text[-1200:] or "下載失敗，請查看 a-Shell 訊息。"
+    return text[-1200:] or "下載失敗，請查看任務訊息。"
 
 
 class QuietLog:
@@ -391,7 +321,7 @@ def run_job(bridge, job_id, runtime, extraction=extractor, probe=False):
     if slot.is_symlink() or slot.resolve().parent != (bridge / "jobs").resolve():
         raise ValueError("任務路徑不正確。")
     # flock is released by iOS even if the app is killed; a stale lock file
-    # therefore does not block recovery. a-Shell has fcntl; Windows tests don't.
+    # therefore does not block recovery. iOS has fcntl; Windows tests don't.
     with (bridge / "worker.lock").open("a+") as lock:
         try:
             import fcntl
@@ -442,7 +372,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
     try:
         check_cancel()
         if probe:
-            update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後返回 App 選擇。")
+            update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後可選擇畫質。")
             with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
                 catalog = quality_catalog(entries, token)
                 check_cancel()
@@ -509,7 +439,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
 
                 def monitor():
                     while not stop.wait(1):
-                        message = "等待 FFmpeg 安全結束；可在 a-Shell 按 Ctrl+C 停止。" if (slot / "cancel").exists() else ("FFmpeg 轉碼中…" if plan and plan[3] else f"FFmpeg 下載與合併 {index}/{len(entries)}…")
+                        message = "正在取消內建 FFmpeg…" if (slot / "cancel").exists() else ("FFmpeg 轉碼中…" if plan and plan[3] else f"FFmpeg 下載與合併 {index}/{len(entries)}…")
                         value = progress_value(progress, duration)
                         update(message=message, progress=(0.8 + value * 0.19 if value is not None else 0.8) if advanced else value)
 
@@ -547,7 +477,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
             import shutil
             try: shutil.rmtree(cache)
             except OSError: print("[MediaPocket] 成品已驗證；部分暫存未能清理，可稍後從檔案 App 清理任務的 tracks 資料夾。", flush=True)
-        update(phase="complete", message="下載與軌道驗證完成，返回 App 後匯入。", outputs=outputs, progress=1)
+        update(phase="complete", message="下載與軌道驗證完成，正在加入檔案庫。", outputs=outputs, progress=1)
     except (KeyboardInterrupt, InterruptedError):
         update(phase="cancelled", message="已取消；未完成的檔案不會匯入。", progress=None)
     except Exception as error:
@@ -583,11 +513,11 @@ def record_startup_failure(bridge, arguments, error):
                     return
         atomic_json(destination, {"phase": "failed", "message": message, "token": token, "updated": time.time()})
     except Exception:
-        print("[MediaPocket] 無法寫回狀態；請檢查 MediaPocketBridge 子資料夾授權。", flush=True)
+        print("[MediaPocket] 無法寫回狀態；請檢查 App 內任務資料夾。", flush=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MediaPocket free a-Shell FFmpeg companion")
+    parser = argparse.ArgumentParser(description="MediaPocket desktop FFmpeg fixture runner")
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--setup", action="store_true")
     actions.add_argument("--job")

@@ -161,7 +161,7 @@ def output_plan(request, entry, encoders):
     if audio_only:
         name = {"m4a": "aac", "mp3": "libmp3lame", "flac": "flac", "wav": "pcm_s16le"}[profile]
         copy = profile == "m4a" and ac in {"aac", "alac"}
-        if not copy and name not in encoders: raise ValueError(f"目前 FFmpeg 缺少 {name}，請更新 a-Shell 或選原編碼。")
+        if not copy and name not in encoders: raise ValueError(f"內建 FFmpeg 缺少 {name}，請選原編碼。")
         args = ["-c:a", "copy" if copy else name]
         if profile in {"m4a", "mp3"} and not copy: args += ["-b:a", "256k" if profile == "m4a" else "320k"]
         return profile, args, {"m4a": "ipod", "mp3": "mp3", "flac": "flac", "wav": "wav"}[profile], not copy
@@ -174,7 +174,7 @@ def output_plan(request, entry, encoders):
         target = "hevc" if profile == "hevc" else "h264"
         choices = [target + "_videotoolbox", "libx265" if target == "hevc" else "libx264"]
         encoder = next((name for name in choices if name in encoders), None)
-        if encoder is None: raise ValueError(f"目前 FFmpeg 缺少 {target} 編碼器，請更新 a-Shell 或選原編碼。")
+        if encoder is None: raise ValueError(f"內建 FFmpeg 缺少 {target} 編碼器，請選原編碼。")
         pixels = number(vf.get("height")) * number(vf.get("width")) or 1920 * 1080
         bitrate = max(2_000_000, min(120_000_000, round(pixels * max(24, number(vf.get("fps"))) * (0.10 if target == "hevc" else 0.16))))
         args = ["-c:v", encoder, "-b:v", str(bitrate), "-pix_fmt", "yuv420p", "-c:a", "copy"]

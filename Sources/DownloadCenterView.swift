@@ -18,11 +18,26 @@ final class DownloadCenterModel {
 
     init(store: DownloadStore) { self.store = store }
 
+    private var prepared = false
+    var initializing = false
+    var ready: Bool { setup?.phase == "ready" && setup?.token == "native" }
+
     func prepare() async {
+        guard !prepared else { return }
+        prepared = true
+        do { try await store.prepare(); try await store.recoverInterrupted() }
+        catch { self.error = error.localizedDescription }
+        await checkEngine()
+    }
+
+    func checkEngine() async {
+        guard !working && !initializing else { return }
+        initializing = true
+        defer { initializing = false }
         do {
-            guard let runner = Bundle.main.url(forResource: "runner", withExtension: "py"),
-                  let engine = Bundle.main.url(forResource: "download_engine", withExtension: "py") else { throw DownloadError.missingRunner }
-            try await store.prepare(runner: runner, engine: engine)
+            try await store.prepare()
+            setup = nil
+            try await NativeDownloadEngine.run("health", directory: store.directory)
             await refresh()
         } catch { self.error = error.localizedDescription }
     }
@@ -35,46 +50,47 @@ final class DownloadCenterModel {
     }
 
     func scan(_ source: String? = nil) async {
-        guard !working else { return }
+        guard ready && !working else { return }
         working = true
         defer { working = false }
         do {
             let request = try await store.create(url: source ?? link, requiresSelection: true, fast: fast)
             if source == nil { link = "" }
             await refresh()
-            await launch(DownloadStore.command(for: request.id, probe: true))
+            try await NativeDownloadEngine.run("probe", directory: store.directory, job: request.id)
+            await refresh()
         } catch { self.error = error.localizedDescription }
     }
 
     func download(_ job: DownloadJob, optionID: String, profile: String) async {
-        guard !working else { return }
+        guard ready && !working else { return }
         working = true
         defer { working = false }
         do {
             let request = try await store.select(job.id, optionID: optionID, outputProfile: fast ? profile : "original", fast: fast, connections: connections)
             await refresh()
-            await launch(DownloadStore.command(for: request.id))
+            try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
+            await refresh()
         } catch { self.error = error.localizedDescription }
     }
 
-    func launch(_ command: String) async {
-        guard let url = DownloadStore.shellURL(command: command),
-              await UIApplication.shared.open(url, options: [:]) else {
-            error = "無法開啟 a-Shell。請先安裝免費的完整版 a-Shell，再進行資料夾授權。"
-            return
-        }
-    }
-
     func cancel(_ id: UUID) async {
-        do { try await store.cancel(id); await refresh() }
-        catch { self.error = error.localizedDescription }
+        do {
+            try await store.cancel(id)
+            NativeDownloadEngine.cancel()
+            await refresh()
+        } catch { self.error = error.localizedDescription }
     }
 
     func retry(_ id: UUID, original: Bool = false) async {
+        guard ready && !working else { return }
+        working = true
+        defer { working = false }
         do {
             let request = try await store.retry(id, original: original)
             await refresh()
-            await launch(DownloadStore.command(for: request.id))
+            try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
+            await refresh()
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -87,7 +103,7 @@ struct DownloadCenterView: View {
     @State private var showSetup = false
     @FocusState private var linkFocused: Bool
 
-    private var ready: Bool { model.setup?.phase == "ready" }
+    private var ready: Bool { model.ready }
 
     var body: some View {
         List {
@@ -114,21 +130,19 @@ struct DownloadCenterView: View {
                     if ready { Task { await model.scan() } }
                     else { showSetup = true }
                 } label: {
-                    Label(ready ? "取得可用畫質" : "先完成下載設定", systemImage: ready ? "list.bullet.rectangle" : "gearshape")
+                    Label(ready ? "取得可用畫質" : model.initializing ? "內建引擎初始化中…" : "檢查內建引擎", systemImage: ready ? "list.bullet.rectangle" : "gearshape")
                 }
                 .accessibilityIdentifier("downloadPrimaryAction")
-                .disabled(model.working || (ready && model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                .disabled(model.working || model.initializing || (ready && model.link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             } header: { Text("貼上連結") }
-              footer: { Text(ready ? "先解析，再回 App 選擇來源畫質與儲存格式，按「開始下載與合併」。" : "下一步：按「先完成下載設定」，完成資料夾授權及元件檢查。你貼上的連結會保留，不必重貼。") }
+              footer: { Text("貼連結 → 取得畫質 → 選擇來源與格式 → 開始下載與合併。FFmpeg 與解析器直接在 App 內執行。") }
             if !ready {
                 Section {
-                    Text("尚未確認下載工具就緒").font(.headline)
-                    Text("先完成「授權交接資料夾」與「安裝／檢查元件」兩個步驟，再返回取得畫質。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Button { linkFocused = false; showSetup = true } label: {
-                        Label("首次使用：設定免費下載工具", systemImage: "terminal")
+                    if model.initializing { ProgressView("正在啟動 App 內建下載引擎…") }
+                    else {
+                        Text(model.setup?.message ?? "內建引擎尚未就緒").font(.subheadline)
+                        Button("重新檢查內建引擎") { Task { await model.checkEngine() } }
                     }
-                    if let setup = model.setup { Text(setup.message).font(.footnote).foregroundStyle(.secondary) }
                 }
             }
             Section("選畫質與下載任務") {
@@ -195,7 +209,7 @@ private struct DownloadJobRow: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(job.status?.title ?? job.request.platform.title).font(.headline).lineLimit(2)
             Text(job.request.url).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if job.request.executionMethod == .smgShortcut {
+            if job.request.executionMethod != .native && job.libraryPath == nil {
                 Text("舊版外部交接紀錄。可在 App 重新解析與選畫質，無須再執行捷徑。")
                     .font(.subheadline).foregroundStyle(.secondary)
                 rescanButton
@@ -232,11 +246,11 @@ private struct DownloadJobRow: View {
                 Button("開始下載與合併", systemImage: "arrow.down.circle.fill") {
                     Task { await model.download(job, optionID: selection, profile: outputProfile) }
                 }.disabled(model.working || selection.isEmpty)
-                Text(model.fast ? "支援分段加速與失敗後續傳；FFmpeg 合併／轉碼完成後自動清理軌道暫存。請保持 a-Shell 在前景。" : "FFmpeg 直接下載，保留 MKV／MKA 原編碼；分片來源請改用加速模式。")
+                Text(model.fast ? "支援分段加速與失敗後續傳；FFmpeg 合併／轉碼完成後自動清理軌道暫存。請保持本 App 在前景。" : "FFmpeg 直接下載，保留 MKV／MKA 原編碼；分片來源請改用加速模式。")
                     .font(.caption).foregroundStyle(.secondary)
                 rescanButton
             } else {
-                Text(job.status?.message ?? "尚未執行；請開啟 a-Shell 取得畫質。")
+                Text(job.status?.message ?? "等待內建引擎處理任務。")
                     .font(.subheadline).foregroundStyle(.secondary)
                 if let progress = job.status?.progress, progress.isFinite {
                     ProgressView(value: min(1, max(0, progress)))
@@ -250,13 +264,14 @@ private struct DownloadJobRow: View {
                     }
                     rescanButton
                 } else {
-                    Button(job.request.selection == nil ? "開啟 a-Shell 取得畫質" : "開啟 a-Shell 執行／檢查中斷") {
-                        Task { await model.launch(DownloadStore.command(for: job.id, probe: job.request.selection == nil)) }
-                    }
-                    if job.status?.phase != "queued" {
-                        Button("要求取消", role: .destructive) { Task { await model.cancel(job.id) } }
-                        Text("取消在安全檢查點生效；如已中斷，可在 a-Shell 按 Ctrl+C，再重新解析。")
+                    if model.working {
+                        Button("取消任務", role: .destructive) { Task { await model.cancel(job.id) } }
+                        Text("取消會保留可續傳的軌道暫存，不匯入未完成檔案。")
                             .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        // A killed app cannot keep executing native FFmpeg. An
+                        // interrupted record can be cancelled and resumed safely.
+                        Button("標記中斷並重試") { Task { await model.cancel(job.id); await model.scan(job.request.url) } }
                     }
                 }
             }
@@ -281,28 +296,24 @@ private struct DownloadSetupView: View {
                     }.disabled(!model.fast)
                     Text("預設 4 段，適用原生 HLS／DASH 分段下載；一般 HTTP 檔案不會強制分塊。網路或平台限流時可降為 1–2 段。關閉後使用直接 FFmpeg 原編碼下載。")
                 }
-                Section("一次設定，完全免費") {
-                    Link("安裝免費完整版 a-Shell", destination: URL(string: "https://apps.apple.com/app/a-shell/id1473805438")!)
-                    Button("1. 授權下載交接資料夾") {
-                        Task { await model.launch("deletemark MediaPocketBridge\npickFolder") }
-                    }
-                    Text("選「瀏覽 → 我的 iPhone → MediaPocket → MediaPocketBridge」，進入這個子資料夾後按開啟。")
-                    Button("2. 安裝／更新解析元件並檢查 FFmpeg") {
-                        Task { await model.launch("jump MediaPocketBridge\npython3 runner.py --setup") }
-                    }
-                    Text("終端應先顯示「MediaPocket 下載程式已啟動」，再安裝 yt-dlp 與解析元件。若沒有第一行，請查看終端是否顯示資料夾或程式路徑錯誤；尚不能認定是 yt-dlp 安裝失敗。")
+                Section("App 內建引擎") {
+                    Label(model.ready ? "內建 FFmpeg 已就緒" : "引擎檢查中／未就緒", systemImage: model.ready ? "checkmark.circle.fill" : "gearshape")
+                    Text("FFmpeg、ffprobe、CPython 與 yt-dlp 隨 App 安裝。解析、下載、合併與轉檔均在本 App 執行，無須額外安裝工具或授權交接資料夾。")
+                    Button("重新檢查內建引擎") { Task { await model.checkEngine() } }
+                        .disabled(model.working || model.initializing)
+                    if let status = model.setup { Text(status.message).font(.footnote).foregroundStyle(.secondary) }
                 }
                 Section("貼連結 → 選畫質 → 下載") {
-                    Text("在本 App 貼連結、按取得畫質。a-Shell 解析完成後嘗試返回 App，在任務卡片選畫質，再按 FFmpeg 下載。兩個階段均可手動返回 App 重新整理，不需要建立或執行捷徑。")
+                    Text("在本 App 貼連結、按取得畫質，在任務卡片選畫質及輸出格式，按「開始下載與合併」。請保持 App 在前景，切到背景時 iOS 可能暫停下載。")
                     Text("支援 YouTube、Instagram、Threads、Bilibili、TikTok、X／Twitter、Vimeo、Dailymotion。實際格式受來源、地區及登入權限限制。清單保存解析度、fps、編碼等條件；下載時重新取得有效來源，不自動降級。")
                 }
                 Section("選填：需要登入的影片") {
                     Text("Netscape Cookie 檔放進「MediaPocket → MediaPocketBridge → cookies」，命名為 youtube.txt、instagram.txt、threads.txt、bilibili.txt、tiktok.txt、x.txt、vimeo.txt 或 dailymotion.txt。Cookie 留在手機；不處理 DRM。")
                 }
                 Section("下載成品") {
-                    Text("完成並驗證軌道後，返回 App 匯入「檔案庫 → App 內檔案 → Downloads」，可直接管理和播放。分段模式在合併期間需要軌道暫存與成品空間；成功後清理暫存，失敗時保留供續傳。已加入來源資料夾仍從原位置讀取，不複製原影片。")
+                    Text("完成並驗證軌道後，自動加入「檔案庫 → App 內檔案 → Downloads」，可直接管理和播放。分段模式在合併期間需要軌道暫存與成品空間；成功後清理暫存，失敗時保留供續傳。已加入來源資料夾仍從原位置讀取，不複製原影片。")
                 }
-            }.navigationTitle("免費下載設定")
+            }.navigationTitle("下載設定")
                 .toolbar { Button("完成") { dismiss() } }
         }
     }

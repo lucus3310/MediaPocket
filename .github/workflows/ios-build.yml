@@ -11,6 +11,7 @@ on:
       - Tests/**
       - PlaybackTests/**
       - KeyboardUITests/**
+      - NativeSupport/**
       - .github/workflows/ios-build.yml
   workflow_dispatch:
 
@@ -25,7 +26,7 @@ jobs:
   build:
     # This is a STANDARD public-repository runner, not a paid larger runner.
     runs-on: xcode-27
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - name: Require a public repository for the zero-cost build
         env:

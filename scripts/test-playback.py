@@ -26,7 +26,7 @@ run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'Media
     '-configuration', 'Debug', '-destination', f'id={identifier}',
     '-derivedDataPath', 'build/Simulator', '-resultBundlePath', 'build/PlaybackTests.xcresult',
     '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
-    '-maximum-test-execution-time-allowance', '120',
+    '-maximum-test-execution-time-allowance', '180',
     'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_REQUIRED=NO', timeout=900)
 Path('build/artifacts/playback-tests.json').write_text(json.dumps({
     'device': device['name'], 'result': 'passed', 'physicalIphone': False,
@@ -37,6 +37,10 @@ Path('build/artifacts/playback-tests.json').write_text(json.dumps({
 }, indent=2) + '\n')
 container = Path(run('xcrun', 'simctl', 'get_app_container', identifier,
                      'io.github.lucus3310.MediaPocket', 'data', capture_output=True, text=True).stdout.strip())
+native_report = json.loads((container / 'Documents/NativeEngineTests/native-engine-tests.json').read_text())
+if not native_report.get('passed'):
+    raise RuntimeError('Native in-process download integration failed')
+shutil.copyfile(container / 'Documents/NativeEngineTests/native-engine-tests.json', 'build/artifacts/native-engine-tests.json')
 for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png', 'DownloadCenter-home.png', 'DownloadCenter-quality.png', 'FormatSheet-advanced.png']:
     shutil.copyfile(container / 'Documents/InterfaceReview' / name, Path('build/artifacts') / name)
 

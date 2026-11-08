@@ -55,6 +55,7 @@ private struct SettingsView: View {
                 Section("MediaPocket") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
                     LabeledContent("播放引擎", value: "系統播放器 + VLC")
+                    LabeledContent("下載引擎", value: "App 內建 FFmpeg + yt-dlp")
                     LabeledContent("影片縮放", value: "雙指 1–8 倍")
                     LabeledContent("解碼偏好", value: "硬體優先，自動回退")
                 }
@@ -70,7 +71,7 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("開源元件") {
-                    NavigationLink("VideoLAN VLCKit 與授權") { AcknowledgementsView() }
+                    NavigationLink("FFmpeg、Python、VLCKit 與授權") { AcknowledgementsView() }
                 }
             }.navigationTitle("設定")
         }
@@ -81,6 +82,16 @@ private struct AcknowledgementsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                Text("MediaPocket 以 GPLv3 公開原始碼。本版本內建的 FFmpegKit 二進位採 GPLv3；CPython 採 PSF 授權，其他依賴保留各自授權。")
+                Link("MediaPocket 完整原始碼與建置腳本", destination: URL(string: "https://github.com/lucus3310/MediaPocket")!)
+                Link("固定 FFmpeg 框架原始碼與重建方式", destination: URL(string: "https://github.com/jaywcjlove/ffmpeg-kit/tree/0bd85df8f9693061f6f979414662baaf876a3e20")!)
+                Link("Python iOS 原始碼與建置方式", destination: URL(string: "https://github.com/beeware/Python-Apple-support/tree/3.13-b18")!)
+                ForEach(["FFmpegKit-LICENSE.txt", "Python-LICENSE.txt"], id: \.self) { name in
+                    if let resources = Bundle.main.resourceURL,
+                       let text = try? String(contentsOf: resources.appending(path: "Native-LICENSES/" + name), encoding: .utf8) {
+                        DisclosureGroup(name) { Text(text).font(.caption.monospaced()) }
+                    }
+                }
                 Text("VLCKit 與 libVLC 來自 VideoLAN，用於多格式影音播放。本 App 使用未修改的官方二進位發行版本。")
                 Link("VLCKit 原始碼與建置方式", destination: URL(string: "https://github.com/videolan/vlckit/tree/6629ecb91e7e05e6b3fcbf77b17d0421cff37923")!)
                 Link("VLC 原始碼", destination: URL(string: "https://code.videolan.org/videolan/vlc")!)
