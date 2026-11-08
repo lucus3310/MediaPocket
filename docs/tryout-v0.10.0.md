@@ -1,6 +1,6 @@
 # MediaPocket 0.10.0：App 內建下載引擎
 
-本版將 FFmpeg、ffprobe、CPython、yt-dlp、YouTube WebKit JS provider 及 Threads extractor 隨 IPA 打包，直接在 App 程序執行。無須安裝 a-Shell、設定捷徑或授權交接資料夾；不使用付費後端。
+本版將 FFmpeg、ffprobe、CPython、yt-dlp、YouTube WebKit JS provider 及 Threads extractor 隨 IPA 打包。FFmpeg 與 Python 在 App 程序內執行，JavaScript 由 App 內 WebKit 處理。無須安裝 a-Shell、設定捷徑或授權交接資料夾；不使用付費後端。
 
 ## 手機操作
 
@@ -14,7 +14,7 @@
 
 ## 執行與容量
 
-Swift → CPython C API → yt-dlp 取得實際來源 → App 內 FFmpeg 下載／合併／轉檔 → ffprobe 驗證軌道 → 原子移入檔案庫。分段模式用 yt-dlp 原生 HTTP/HLS/DASH 下載以支援並行與續傳，FFmpeg 負責合併／轉檔；關閉分段模式則由內建 FFmpeg 直接讀取媒體來源。所有程式都在同一個 App 程序。
+Swift → CPython C API → yt-dlp 取得實際來源 → App 內 FFmpeg 下載／合併／轉檔 → ffprobe 驗證軌道 → 原子移入檔案庫。分段模式用 yt-dlp 原生 HTTP/HLS/DASH 下載以支援並行與續傳，FFmpeg 負責合併／轉檔；關閉分段模式則由內建 FFmpeg 直接讀取媒體來源。每個 FFmpeg／ffprobe 命令使用 App 內新的工作執行緒，隔離 CLI 的執行緒區域設定。
 
 畫質清單依來源提供的格式產生，不設定 4K／8K 上限、不放大補畫質。權限、地區及來源仍會限制可取得的格式。轉檔不能增加來源品質。VideoToolbox 編碼器優先，有可用軟體編碼器時才回退；HDR 預設保留原編碼。
 
@@ -28,4 +28,4 @@ Swift → CPython C API → yt-dlp 取得實際來源 → App 內 FFmpeg 下載�
 
 MediaPocket 本版採 GPLv3，固定 FFmpeg 二進位本身亦採 GPLv3，非 LGPL-only。完整授權隨 App 附帶；依賴版本、校驗碼與來源重建位置見 `scripts/prepare-native.py`、`docs/native-engine-dependencies.md`，修改的橋接程式亦公開。CPython 採 PSF，VLCKit 保留其適用授權。
 
-CI 將分開驗證桌面測試、iOS 模擬器內建 Python／WebKit JS／FFmpeg／ffprobe／下載合併轉檔，以及中文鍵盤收合。這些證據不等於實體 iPhone、平台即時回應或 4K 真機速度已驗證。
+本版已通過桌面、iOS 模擬器 Debug／Release 及中文鍵盤測試，詳見 [實際驗證紀錄](validation-v0.10.0.md)。這些證據不等於實體 iPhone、平台即時回應或 4K 真機速度已驗證。
