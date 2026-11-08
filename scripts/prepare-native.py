@@ -43,6 +43,14 @@ source = source.replace('return dlsym(RTLD_DEFAULT, name);',
     'void *handle = dlopen("@rpath/ffmpegkit.framework/ffmpegkit", RTLD_NOW | RTLD_GLOBAL);\n'
     '    return dlsym(handle ? handle : RTLD_DEFAULT, name);')
 bridge.write_text(source)
+# The C callback retains only an opaque pointer. Keep its Swift owner alive
+# explicitly through the native call, including optimized Release builds.
+execution = DEST / 'FFmpegKit/Sources/FFmpegKit/Execution.swift'
+source = execution.read_text()
+source = source.replace('let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()',
+    'let opaque = Unmanaged.passRetained(callbackContext).toOpaque()\n'
+    '        defer { Unmanaged<NativeCallbackContext>.fromOpaque(opaque).release() }')
+execution.write_text(source)
 packages = DEST / 'packages'
 if not (packages / 'yt_dlp').exists():
     subprocess.run([sys.executable, '-m', 'pip', 'install', '--target', str(packages), '--only-binary=:all:', '--no-compile', '--no-deps',

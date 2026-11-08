@@ -1,11 +1,27 @@
 import Foundation
 import ffmpegkit
 import WebKit
+import Synchronization
 
 private enum NativeEngineError: LocalizedError {
     case failure(String)
     var errorDescription: String? {
         switch self { case .failure(let message): message }
+    }
+}
+
+private final class NativeCommandCompletion: Sendable {
+    private let value = Mutex<Int32>(-1)
+    private let completed = DispatchSemaphore(value: 0)
+
+    func finish(_ code: Int32) {
+        value.withLock { $0 = code }
+        completed.signal()
+    }
+
+    func wait() -> Int32 {
+        completed.wait()
+        return value.withLock { $0 }
     }
 }
 
@@ -51,6 +67,29 @@ private func nativeMediaCommand(_ json: UnsafePointer<CChar>?, _ output: UnsafeP
     let err = URL(fileURLWithPath: String(cString: error))
     do {
         let arguments = try JSONDecoder().decode([String].self, from: Data(String(cString: json).utf8))
+        // The embedded CLI has __thread option globals which are not all reset
+        // between invocations (e.g. -y/-n). A fresh native thread gives every
+        // command clean TLS, without forking or leaving this app process.
+        let result = NativeCommandCompletion()
+        let worker = Thread {
+            autoreleasepool {
+                let code = executeNativeMedia(arguments, out: out, err: err)
+                result.finish(code)
+            }
+        }
+        worker.name = "MediaPocket.FFmpeg.command"
+        worker.qualityOfService = .userInitiated
+        worker.stackSize = 8 * 1024 * 1024
+        worker.start()
+        return result.wait()
+    } catch {
+        try? error.localizedDescription.write(to: err, atomically: true, encoding: .utf8)
+        return -1
+    }
+}
+
+private func executeNativeMedia(_ arguments: [String], out: URL, err: URL) -> Int32 {
+    do {
         let command = arguments.first
         let session: any Session
         if command == "ffmpeg" {

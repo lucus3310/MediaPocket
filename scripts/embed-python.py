@@ -20,7 +20,7 @@ shutil.copytree(python / slice_name / 'lib-arm64', stdlib, dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns('libpython*.dylib', '__pycache__'))
 shutil.copytree(native / 'packages', app / 'python-packages', dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns('__pycache__', '*.pyc', 'bin'))
-if os.environ['CONFIGURATION'] == 'Debug':
+if os.environ['CONFIGURATION'] == 'Debug' or simulator:
     shutil.copy2(root / 'scripts/fixtures/native_engine_smoke.py', app / 'native_engine_smoke.py')
 else:
     (app / 'native_engine_smoke.py').unlink(missing_ok=True)

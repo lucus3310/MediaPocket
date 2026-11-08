@@ -22,12 +22,21 @@ print(f"Playback test device: {device['name']} ({identifier})", flush=True)
 if device['state'] != 'Booted':
     run('xcrun', 'simctl', 'boot', identifier)
 run('xcrun', 'simctl', 'bootstatus', identifier, '-b', timeout=240)
-run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'MediaPocket',
+try:
+    run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'MediaPocket',
     '-configuration', 'Debug', '-destination', f'id={identifier}',
     '-derivedDataPath', 'build/Simulator', '-resultBundlePath', 'build/PlaybackTests.xcresult',
     '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
     '-maximum-test-execution-time-allowance', '180',
-    'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_REQUIRED=NO', timeout=900)
+        'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_REQUIRED=NO', timeout=900)
+finally:
+    # Keep native CLI errors on failure, even when no final report was written.
+    lookup = subprocess.run(['xcrun', 'simctl', 'get_app_container', identifier,
+                             'io.github.lucus3310.MediaPocket', 'data'], capture_output=True, text=True)
+    if lookup.returncode == 0:
+        diagnostics = Path(lookup.stdout.strip()) / 'Documents/NativeEngineTests'
+        if diagnostics.exists():
+            shutil.copytree(diagnostics, Path('build/NativeDiagnostics'), dirs_exist_ok=True)
 Path('build/artifacts/playback-tests.json').write_text(json.dumps({
     'device': device['name'], 'result': 'passed', 'physicalIphone': False,
     'checks': ['CFR and VFR native adjacent-frame timestamps', 'VLC next and previous frame callbacks',

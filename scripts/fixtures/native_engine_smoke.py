@@ -83,7 +83,8 @@ def smoke(root, runtime):
             runner.atomic_json(slot / 'request.json', request)
             runner.run_job(root, job, runtime, extraction=extraction)
             status = json.loads((slot / 'status.json').read_text())
-            assert status['phase'] == 'complete', status
+            diagnostic = (slot / 'ffmpeg-error.txt').read_text(errors='replace') if (slot / 'ffmpeg-error.txt').exists() else ''
+            assert status['phase'] == 'complete', (status, diagnostic[-3000:])
             assert len(status['outputs']) == 1
             metadata = json.loads((slot / 'probe.json').read_text())
             types = {stream['codec_type'] for stream in metadata['streams']}

@@ -82,7 +82,26 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.lucus3310.MediaPocket.KeyboardUITests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: MediaPocket
+  MediaPocketNativeReleaseTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PlaybackTests/NativeDownloadTests.swift
+    dependencies:
+      - target: MediaPocket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.lucus3310.MediaPocket.NativeReleaseTests
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
+  MediaPocketNativeRelease:
+    build:
+      targets:
+        MediaPocket: all
+    test:
+      config: Release
+      targets:
+        - MediaPocketNativeReleaseTests
   MediaPocketKeyboardUI:
     build:
       targets:
