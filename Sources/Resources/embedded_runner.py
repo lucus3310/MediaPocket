@@ -57,6 +57,9 @@ def run(action, directory, job):
         # Included only in Debug builds; actual iOS framework integration test.
         from native_engine_smoke import smoke
         smoke(root, runtime)
+    elif action == 'js-smoke':
+        from native_engine_smoke import javascript
+        javascript(root)
     elif action in ('probe', 'download'):
         try:
             runner.run_job(root, job, runtime, probe=action == 'probe')

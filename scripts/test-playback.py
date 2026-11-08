@@ -41,6 +41,10 @@ native_report = json.loads((container / 'Documents/NativeEngineTests/native-engi
 if not native_report.get('passed'):
     raise RuntimeError('Native in-process download integration failed')
 shutil.copyfile(container / 'Documents/NativeEngineTests/native-engine-tests.json', 'build/artifacts/native-engine-tests.json')
+js_report = json.loads((container / 'Documents/NativeEngineTests/native-js-tests.json').read_text())
+if not js_report.get('passed') or js_report.get('consoleResult') != 3:
+    raise RuntimeError('Bundled WebKit console channel failed')
+shutil.copyfile(container / 'Documents/NativeEngineTests/native-js-tests.json', 'build/artifacts/native-js-tests.json')
 for name in ['PlayerDock-portrait.png', 'PlayerDock-landscape.png', 'DownloadCenter-home.png', 'DownloadCenter-quality.png', 'FormatSheet-advanced.png']:
     shutil.copyfile(container / 'Documents/InterfaceReview' / name, Path('build/artifacts') / name)
 

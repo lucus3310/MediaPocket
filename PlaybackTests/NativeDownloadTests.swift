@@ -4,7 +4,16 @@ import Testing
 
 @MainActor
 struct NativeDownloadTests {
-    @Test("Bundled CPython, WebKit JS, HTTP download, FFmpeg merge/transcode and ffprobe run inside iOS")
+    @Test("YouTube's bundled WebKit provider delivers console results inside iOS")
+    func javaScriptMessageChannel() async throws {
+        let root = URL.documentsDirectory.appending(path: "NativeEngineTests")
+        try await NativeDownloadEngine.run("js-smoke", directory: root)
+        let report = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: root.appending(path: "native-js-tests.json"))) as? [String: Any])
+        #expect(report["passed"] as? Bool == true)
+        #expect(report["consoleResult"] as? Int == 3)
+    }
+
+    @Test("Bundled CPython, HTTP download, FFmpeg merge/transcode and ffprobe run inside iOS")
     func inProcessPipeline() async throws {
         let root = URL.documentsDirectory.appending(path: "NativeEngineTests")
         try await NativeDownloadEngine.run("health", directory: root)

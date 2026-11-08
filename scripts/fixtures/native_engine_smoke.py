@@ -11,16 +11,28 @@ import runner
 import download_engine
 
 
-def smoke(root, runtime):
-    from yt_dlp import YoutubeDL
+def javascript(root):
     from yt_dlp_plugins.webkit_jsi.lib.easy import WKJSE_Factory, WKJSE_Webview
     from yt_dlp_plugins.webkit_jsi.lib.logging import DefaultLoggerImpl
-    # Calls UIKit/WebKit through ctypes on the actual iOS runtime, not a mock.
+    # The vendor's SCRIPT_TEMPL ends in .then(() => restoreWebKit), which
+    # discards JS return values. EJS receives results through console.log.
+    messages = []
+    delivered = threading.Event()
+    def on_log(message):
+        messages.append(message)
+        if message.get('logType') == 2 and message.get('argsArr') == [3]:
+            delivered.set()
     with WKJSE_Factory(DefaultLoggerImpl()) as send:
         with WKJSE_Webview(send) as webview:
-            # execute_js passes a function BODY to callAsyncJavaScript; unlike
-            # evaluateJavaScript, a bare expression does not return a value.
-            assert webview.execute_js('return 1 + 2;') == 3, 'WebKit function did not return 3'
+            webview.on_script_log(on_log)
+            webview.execute_js('console.log(1 + 2);')
+            assert delivered.wait(5), 'WebKit console result missing: ' + repr(messages)
+    runner.atomic_json(root / 'native-js-tests.json', dict(passed=True, physicalIphone=False,
+        execution='bundled WebKit JSI console channel on iOS Simulator', consoleResult=3))
+
+
+def smoke(root, runtime):
+    from yt_dlp import YoutubeDL
 
     root.mkdir(parents=True, exist_ok=True)
     def command(arguments, name):
@@ -81,5 +93,5 @@ def smoke(root, runtime):
         server.shutdown()
         server.server_close()
     runner.atomic_json(root / 'native-engine-tests.json', dict(passed=True, physicalIphone=False,
-        execution='in-process CPython + FFmpeg on iOS Simulator', webKitJS=3,
+        execution='in-process CPython + FFmpeg on iOS Simulator',
         checks=results, repeatedCLI=True, ffprobeJSON=True))
