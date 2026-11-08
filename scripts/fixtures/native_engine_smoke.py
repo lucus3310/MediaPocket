@@ -85,6 +85,7 @@ def smoke(root, runtime):
             status = json.loads((slot / 'status.json').read_text())
             diagnostic = (slot / 'ffmpeg-error.txt').read_text(errors='replace') if (slot / 'ffmpeg-error.txt').exists() else ''
             assert status['phase'] == 'complete', (status, diagnostic[-3000:])
+            assert 'Splitting the commandline' not in diagnostic, 'Native bridge ignored -loglevel warning'
             assert len(status['outputs']) == 1
             metadata = json.loads((slot / 'probe.json').read_text())
             types = {stream['codec_type'] for stream in metadata['streams']}

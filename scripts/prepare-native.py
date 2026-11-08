@@ -42,6 +42,15 @@ source = bridge.read_text()
 source = source.replace('return dlsym(RTLD_DEFAULT, name);',
     'void *handle = dlopen("@rpath/ffmpegkit.framework/ffmpegkit", RTLD_NOW | RTLD_GLOBAL);\n'
     '    return dlsym(handle ? handle : RTLD_DEFAULT, name);')
+source = source.replace('static fks_execution_context *fks_current_context;',
+    'static fks_execution_context *fks_current_context;\n'
+    'static int (*fks_log_level)(void);')
+source = source.replace('fks_execution_context *execution = fks_current_context;',
+    'fks_execution_context *execution = fks_current_context;\n'
+    '    if (fks_log_level && level >= 0 && (level & 0xff) > fks_log_level()) return;')
+source = source.replace('fks_current_context = &execution;',
+    'fks_log_level = (int (*)(void))fks_symbol("av_log_get_level");\n'
+    '    fks_current_context = &execution;')
 bridge.write_text(source)
 # The C callback retains only an opaque pointer. Keep its Swift owner alive
 # explicitly through the native call, including optimized Release builds.
