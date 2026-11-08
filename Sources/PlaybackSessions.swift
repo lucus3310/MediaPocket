@@ -183,9 +183,16 @@ private final class VLCFrameDelegate: NSObject, VLCMediaPlayerDelegate {
 @MainActor
 @Observable
 final class VLCPlaybackSession {
+    private static let configureEvents: Void = {
+        // VLCKit's default delivers notifications inside libvlc callbacks.
+        // A last notification retain can then deallocate the player while the
+        // libvlc player lock is held. The official asynchronous main-queue
+        // configuration also keeps UI/timer updates on the UI thread.
+        VLCLibrary.sharedEventsConfiguration = VLCEventsLegacyConfiguration()
+    }()
     // VLC's Apple decoder module is tried first; `any` preserves a software
     // fallback for codecs or devices without a usable hardware decoder.
-    @ObservationIgnored let player = VLCMediaPlayer(options: ["--codec=videotoolbox,any"])
+    @ObservationIgnored let player: VLCMediaPlayer
     @ObservationIgnored private var frameDelegate: VLCFrameDelegate?
     @ObservationIgnored private var sourceAccess: ScopedFileAccess?
     private(set) var position = 0.0
@@ -204,6 +211,11 @@ final class VLCPlaybackSession {
     private var started = false
     private var generation = UUID()
     private var frameResult: Int?
+
+    init() {
+        _ = Self.configureEvents
+        player = VLCMediaPlayer(options: ["--codec=videotoolbox,any"])
+    }
 
     func start(_ item: LibraryItem, resume: Bool = true) {
         guard !started else { return }

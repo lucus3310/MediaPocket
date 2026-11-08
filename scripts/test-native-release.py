@@ -16,6 +16,13 @@ identifier = device['udid']
 if device['state'] != 'Booted':
     run('xcrun', 'simctl', 'boot', identifier)
 run('xcrun', 'simctl', 'bootstatus', identifier, '-b', timeout=240)
+# Release must produce new reports; a zero-test run cannot reuse Debug evidence.
+lookup = subprocess.run(['xcrun', 'simctl', 'get_app_container', identifier,
+                         'io.github.lucus3310.MediaPocket', 'data'], capture_output=True, text=True)
+if lookup.returncode == 0:
+    reports = Path(lookup.stdout.strip()) / 'Documents/NativeEngineTests'
+    for name in ['native-engine-tests.json', 'native-js-tests.json']:
+        (reports / name).unlink(missing_ok=True)
 run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'MediaPocketNativeRelease',
     '-configuration', 'Release', '-destination', f'id={identifier}', '-derivedDataPath', 'build/Simulator',
     '-resultBundlePath', 'build/NativeReleaseTests.xcresult', '-parallel-testing-enabled', 'NO',

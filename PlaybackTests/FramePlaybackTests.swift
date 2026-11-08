@@ -69,6 +69,34 @@ private func makeClip(variable: Bool) async throws -> (URL, [Double]) {
 @Suite(.serialized)
 @MainActor
 struct FramePlaybackTests {
+    @Test("Repeated VLC stop and release drains callbacks outside the libvlc thread")
+    func repeatedVLCTeardown() async throws {
+        let (url, _) = try await makeClip(variable: false)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let item = LibraryItem(url: url, relativePath: url.lastPathComponent, isDirectory: false, size: 0, modified: .now)
+        let window = try playbackWindow()
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        func cycle() async throws {
+            let session = VLCPlaybackSession()
+            let canvas = UIView(frame: window.bounds)
+            controller.view.addSubview(canvas)
+            session.player.drawable = canvas
+            defer { session.stop(); session.player.drawable = nil; canvas.removeFromSuperview() }
+            session.start(item, resume: false)
+            try await waitFor { session.refresh(); return session.ready && session.player.hasVideoOut }
+            #expect(await session.stepFrame(1))
+        }
+        for _ in 0..<6 {
+            try await cycle()
+            // Let queued UIKit notifications and the SDK's release queue drain
+            // after the last application reference to each player is removed.
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     @Test("Original-file bookmarks play on both engines and leave only a small catalog")
     func linkedOriginalPlayback() async throws {
         let files = FileManager.default
