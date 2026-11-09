@@ -275,7 +275,7 @@ def apply_selection(entries, catalog, selection):
 
 def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
-    allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie"}
+    allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie", "authorization", "range"}
     for _, url, headers in inputs:
         lines = []
         for name, value in headers.items():
@@ -284,7 +284,7 @@ def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
             if "\r" in str(value) or "\n" in str(value):
                 raise ValueError("來源 HTTP 標頭格式錯誤。")
             lines.append(f"{name}: {value}\r\n")
-        args += ["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "30000000",
+        args += ["-protocol_whitelist", "file,http,https,tcp,tls,crypto", "-rw_timeout", "30000000",
                  "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
         if lines:
             args += ["-headers", "".join(lines)]
@@ -409,7 +409,8 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 raise ValueError("任務輸出目錄含有非預期檔案，請建立新任務。")
             old.unlink()
         outputs = []
-        staged = request.get("transferMode") == "fast"
+        # All legacy jobs use FFmpeg for transfer; yt-dlp remains metadata-only.
+        staged = False
         advanced = staged or request.get("outputProfile") not in (None, "original")
         encoders = engine.encoder_set(runtime, slot) if advanced else set()
         cache = slot / "tracks"
