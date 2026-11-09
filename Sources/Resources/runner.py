@@ -214,6 +214,16 @@ def quality_catalog(entries, token):
     return engine.catalog(entries, token)
 
 
+def direct_entries(entries):
+    result = []
+    for entry in entries:
+        supported = available_formats(entry)
+        if not supported:
+            raise ValueError("此來源沒有可由 FFmpeg 直接下載的完整媒體／HLS 網址，未改用 yt-dlp 下載。")
+        result.append(dict(entry, formats=supported))
+    return result
+
+
 def legacy_quality_catalog(entries, token):
     if not entries or len(entries) > 20 or any(entry.get("is_live") for entry in entries):
         raise ValueError("目前僅支援已結束的影片貼文，每則最多 20 段。")
@@ -376,7 +386,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
             update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後可選擇畫質。")
             with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
                 if request.get("transferMode") != "fast":
-                    entries = [dict(entry, formats=available_formats(entry)) for entry in entries]
+                    entries = direct_entries(entries)
                 catalog = quality_catalog(entries, token)
                 check_cancel()
                 atomic_json(slot / "catalog.json", catalog)
@@ -409,7 +419,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         with extraction(request, bridge) as (ydl, entries):
             if request.get("requiresSelection"):
                 if not staged:
-                    entries = [dict(entry, formats=available_formats(entry)) for entry in entries]
+                    entries = direct_entries(entries)
                 catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
                 if catalog.get("token") != token:
                     raise ValueError("畫質清單不屬於此任務，請重新解析。")
