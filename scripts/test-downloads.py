@@ -396,6 +396,25 @@ class FFmpegIntegration(unittest.TestCase):
             self.assertEqual({stream["codec_type"] for stream in streams}, {"audio"} if audio else {"video", "audio"})
             self.assertFalse((slot / "tracks").exists())
 
+    def test_ffmpeg_direct_profiles_never_use_ytdlp_transfers(self):
+        for profile, audio, suffix in [("auto", False, "mp4"), ("h264", False, "mp4"),
+                                       ("mp3", True, "mp3"), ("m4a", True, "m4a")]:
+            job_id, slot = self.request(audio)
+            request = json.loads((slot / "request.json").read_text())
+            request.update(outputProfile=profile)
+            runner.atomic_json(slot / "request.json", request)
+            encoders = runner.engine.encoder_set(self.runtime, slot) - {"h264_videotoolbox", "hevc_videotoolbox"}
+            with patch.object(runner.engine, "download_tracks", side_effect=AssertionError("yt-dlp transfer forbidden")) as tracks, \
+                 patch.object(runner.engine, "encoder_set", return_value=encoders):
+                runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
+            tracks.assert_not_called()
+            status = json.loads((slot / "status.json").read_text())
+            self.assertEqual(status["phase"], "complete", (profile, status))
+            output = slot / "output" / ("001." + suffix)
+            streams = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(output)]))["streams"]
+            self.assertEqual({item["codec_type"] for item in streams}, {"audio"} if audio else {"video", "audio"})
+            self.assertFalse((slot / "tracks").exists())
+
     def test_fast_native_hls_fragments(self):
         subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(self.base / "video.mp4"), "-i", str(self.base / "audio.m4a"),
                         "-c", "copy", "-f", "hls", "-hls_time", "0.5", "-hls_playlist_type", "vod", str(self.base / "fast.m3u8")], check=True)
@@ -511,6 +530,6 @@ if __name__ == "__main__":
                    "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion",
                    "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection",
                    "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "HTTP Range resume",
-                   "MP4 H264 M4A MP3 FLAC WAV", "cache cleanup"]
+                   "MP4 H264 M4A MP3 FLAC WAV", "cache cleanup", "FFmpeg direct profiles forbid yt-dlp transfers"]
     })
     raise SystemExit(not result.wasSuccessful())

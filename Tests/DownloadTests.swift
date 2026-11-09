@@ -8,7 +8,7 @@ func nativeInterruptionRecovery() async throws {
     defer { try? FileManager.default.removeItem(at: base) }
     let store = DownloadStore(directory: base, library: MediaLibrary(directory: base.appending(path: "Media")))
     try await store.prepare()
-    let request = try await store.create(url: "https://youtu.be/fixture", requiresSelection: true)
+    let request = try await store.create(url: "https://youtu.be/fixture", requiresSelection: true, fast: true)
     let slot = base.appending(path: "jobs/\(request.id.uuidString)")
     let catalog = DownloadCatalog(schema: 1, token: request.token, title: "Fixture", options: [DownloadOption(id: "video:720", label: "720p", audioOnly: false)])
     try JSONEncoder().encode(catalog).write(to: slot.appending(path: "catalog.json"))
@@ -20,8 +20,9 @@ func nativeInterruptionRecovery() async throws {
     try Data("partial".utf8).write(to: partial)
     try await store.recoverInterrupted()
     #expect(try await store.jobs().first?.status?.phase == "failed")
-    let retry = try await store.retry(request.id)
+    let retry = try await store.retry(request.id, fast: false)
     #expect(retry.selection == "video:720" && retry.attempt == 1 && retry.executionMethod == .native)
+    #expect(retry.transferMode == nil)
     #expect(try Data(contentsOf: partial) == Data("partial".utf8))
 }
 

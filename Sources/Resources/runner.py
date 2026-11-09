@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, quote, urlparse
 import uuid
 import download_engine as engine
 
-VERSION = "0.10.0"
+VERSION = "0.10.2"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -263,7 +263,7 @@ def apply_selection(entries, catalog, selection):
     return selected_entries
 
 
-def ffmpeg_command(inputs, output, progress, audio_only):
+def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
     allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie"}
     for _, url, headers in inputs:
@@ -288,7 +288,8 @@ def ffmpeg_command(inputs, output, progress, audio_only):
         audio = next((index for index in reversed(range(len(inputs))) if inputs[index][0].get("acodec") != "none"), None)
         if audio is not None:
             args += ["-map", f"{audio}:a:0?"]
-    return args + ["-c", "copy", "-progress", str(progress), "-f", "matroska", str(output)]
+    codecs, muxer = (plan[1], plan[2]) if plan else (["-c", "copy"], "matroska")
+    return args + codecs + ["-progress", str(progress), "-f", muxer, str(output)]
 
 
 def verify_output(runtime, output, audio_only, slot, expected_audio=False):
@@ -374,6 +375,8 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         if probe:
             update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後可選擇畫質。")
             with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
+                if request.get("transferMode") != "fast":
+                    entries = [dict(entry, formats=available_formats(entry)) for entry in entries]
                 catalog = quality_catalog(entries, token)
                 check_cancel()
                 atomic_json(slot / "catalog.json", catalog)
@@ -396,14 +399,17 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 raise ValueError("任務輸出目錄含有非預期檔案，請建立新任務。")
             old.unlink()
         outputs = []
-        advanced = request.get("transferMode") == "fast" or request.get("outputProfile") not in (None, "original")
+        staged = request.get("transferMode") == "fast"
+        advanced = staged or request.get("outputProfile") not in (None, "original")
         encoders = engine.encoder_set(runtime, slot) if advanced else set()
         cache = slot / "tracks"
-        if advanced:
+        if staged:
             cache.mkdir(exist_ok=True)
             if cache.is_symlink(): raise ValueError("暫存資料夾不正確。")
         with extraction(request, bridge) as (ydl, entries):
             if request.get("requiresSelection"):
+                if not staged:
+                    entries = [dict(entry, formats=available_formats(entry)) for entry in entries]
                 catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
                 if catalog.get("token") != token:
                     raise ValueError("畫質清單不屬於此任務，請重新解析。")
@@ -421,7 +427,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 if entry.get("is_live"):
                     raise ValueError("直播進行中暫不支援，請在直播結束後下載回放。")
                 plan = plans[index - 1] if advanced else None
-                inputs = inputs_for(entry, ydl, request["audioOnly"]) if not advanced else []
+                inputs = inputs_for(entry, ydl, request["audioOnly"]) if not staged else []
                 name = f"{index:03d}." + (plan[0] if plan else "mka" if request["audioOnly"] else "mkv")
                 final = output_dir / name
                 temporary = output_dir / (name + ".part")
@@ -432,7 +438,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                        title=str(entry.get("title") or request["platform"])[:200], progress=None)
                 print(f"[MediaPocket] FFmpeg 下載與合併 {index}/{len(entries)}…", flush=True)
                 paths = None
-                if advanced:
+                if staged:
                     paths = engine.download_tracks(ydl, entry, cache, request.get("connections", 4), update, check_cancel)
                     update(phase="converting" if plan[3] else "merging", message="FFmpeg 轉碼中…" if plan[3] else "FFmpeg 原編碼合併中…", progress=0.8)
                 stop = threading.Event()
@@ -441,12 +447,12 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                     while not stop.wait(1):
                         message = "正在取消內建 FFmpeg…" if (slot / "cancel").exists() else ("FFmpeg 轉碼中…" if plan and plan[3] else f"FFmpeg 下載與合併 {index}/{len(entries)}…")
                         value = progress_value(progress, duration)
-                        update(message=message, progress=(0.8 + value * 0.19 if value is not None else 0.8) if advanced else value)
+                        update(message=message, progress=(0.8 + value * 0.19 if value is not None else 0.8) if staged else value)
 
                 watcher = threading.Thread(target=monitor, daemon=True)
                 watcher.start()
                 try:
-                    command = engine.local_command(paths, temporary, progress, request["audioOnly"], plan) if advanced else ffmpeg_command(inputs, temporary, progress, request["audioOnly"])
+                    command = engine.local_command(paths, temporary, progress, request["audioOnly"], plan) if staged else ffmpeg_command(inputs, temporary, progress, request["audioOnly"], plan)
                     result = runtime.run(command,
                                          slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
                     fallback = engine.software_fallback(request, entry, encoders, plan) if result and advanced else None
@@ -455,15 +461,16 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                         temporary.unlink(missing_ok=True)
                         error_log = slot / "ffmpeg-error.txt"
                         if error_log.exists(): error_log.replace(slot / "ffmpeg-videotoolbox-error.txt")
-                        update(phase="converting", message="VideoToolbox 無法完成，改用可用的軟體編碼器重試；不需重新下載軌道。", progress=0.8)
-                        result = runtime.run(engine.local_command(paths, temporary, progress, request["audioOnly"], fallback),
+                        update(phase="converting", message="VideoToolbox 無法完成，改用可用的軟體編碼器重試。" + ("沿用已下載軌道。" if staged else "FFmpeg 將重新讀取來源下載。"), progress=0.8 if staged else None)
+                        command = engine.local_command(paths, temporary, progress, request["audioOnly"], fallback) if staged else ffmpeg_command(inputs, temporary, progress, request["audioOnly"], fallback)
+                        result = runtime.run(command,
                                              slot / "ffmpeg-stdout.txt", slot / "ffmpeg-error.txt")
                 finally:
                     stop.set()
                     watcher.join(timeout=3)
                 check_cancel()
                 if result:
-                    if advanced:
+                    if staged:
                         raise ValueError("FFmpeg 合併／轉碼失敗，已保留軌道暫存。請改用原編碼重試，或檢查裝置編碼器及可用空間；詳細錯誤在任務資料夾的 ffmpeg-error.txt。")
                     raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
                 expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
@@ -473,7 +480,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         check_cancel()
         if not outputs:
             raise ValueError("沒有取得影片。")
-        if advanced:
+        if staged:
             import shutil
             try: shutil.rmtree(cache)
             except OSError: print("[MediaPocket] 成品已驗證；部分暫存未能清理，可稍後從檔案 App 清理任務的 tracks 資料夾。", flush=True)

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import threading
 import uuid
+from unittest.mock import patch
 
 import runner
 import download_engine
@@ -108,7 +109,7 @@ def smoke(root, runtime):
     (root / 'jobs').mkdir(exist_ok=True)
     results = []
     try:
-        for mode, profile in [('fast', 'auto'), (None, 'original'), ('fast', 'mp3')]:
+        for mode, profile in [('fast', 'auto'), (None, 'original'), (None, 'auto'), (None, 'mp3'), ('fast', 'mp3')]:
             job, token = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()
             slot = root / 'jobs' / job
             slot.mkdir()
@@ -121,7 +122,8 @@ def smoke(root, runtime):
             selection = next(option for option in catalog['options'] if option['audioOnly'] == (profile == 'mp3'))
             request.update(selection=selection['id'], audioOnly=selection['audioOnly'], outputProfile=profile)
             runner.atomic_json(slot / 'request.json', request)
-            runner.run_job(root, job, runtime, extraction=extraction)
+            with patch.object(download_engine, 'download_tracks', side_effect=AssertionError('FFmpeg mode must not use yt-dlp transfers')) if mode is None else contextlib.nullcontext():
+                runner.run_job(root, job, runtime, extraction=extraction)
             status = json.loads((slot / 'status.json').read_text())
             diagnostic = (slot / 'ffmpeg-error.txt').read_text(errors='replace') if (slot / 'ffmpeg-error.txt').exists() else ''
             assert status['phase'] == 'complete', (status, diagnostic[-3000:])

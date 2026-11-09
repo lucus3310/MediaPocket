@@ -8,8 +8,10 @@ final class DownloadCenterModel {
     var setup: DownloadStatus?
     var error: String?
     var working = false
-    var fast = UserDefaults.standard.object(forKey: "fastDownloads") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(fast, forKey: "fastDownloads") }
+    // The old fastDownloads default enabled yt-dlp transfers without an explicit
+    // choice. A new key requires opt-in, including when upgrading an old install.
+    var fast = UserDefaults.standard.object(forKey: "enableYTDLPTransfer") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(fast, forKey: "enableYTDLPTransfer") }
     }
     var connections = UserDefaults.standard.object(forKey: "downloadConnections") as? Int ?? 4 {
         didSet { UserDefaults.standard.set(connections, forKey: "downloadConnections") }
@@ -70,7 +72,7 @@ final class DownloadCenterModel {
         working = true
         defer { working = false }
         do {
-            let request = try await store.select(job.id, optionID: optionID, outputProfile: fast ? profile : "original", fast: fast, connections: connections)
+            let request = try await store.select(job.id, optionID: optionID, outputProfile: profile, fast: fast, connections: connections)
             await refresh()
             try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
             await refresh()
@@ -90,7 +92,7 @@ final class DownloadCenterModel {
         working = true
         defer { working = false }
         do {
-            let request = try await store.retry(id, original: original)
+            let request = try await store.retry(id, original: original, fast: fast)
             await refresh()
             try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
             await refresh()
@@ -237,7 +239,7 @@ private struct DownloadJobRow: View {
                     Text("預估來源大小：約 \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if model.fast {
+                Group {
                     Picker("儲存格式", selection: Binding(get: { outputProfile }, set: { profile = $0 })) {
                         ForEach(profiles, id: \.0) { entry in Text(entry.1).tag(entry.0) }
                     }
@@ -249,7 +251,7 @@ private struct DownloadJobRow: View {
                 Button("開始下載與合併", systemImage: "arrow.down.circle.fill") {
                     Task { await model.download(job, optionID: selection, profile: outputProfile) }
                 }.disabled(model.working || selection.isEmpty)
-                Text(model.fast ? "支援分段加速與失敗後續傳；FFmpeg 合併／轉碼完成後自動清理軌道暫存。請保持本 App 在前景。" : "FFmpeg 直接下載，保留 MKV／MKA 原編碼；分片來源請改用加速模式。")
+                Text(model.fast ? "目前使用 yt-dlp 下載軌道，再由 FFmpeg 合併／轉檔。可在設定關閉此選用模式。" : "FFmpeg 直接連線下載影音，並合併／轉檔；yt-dlp 只解析來源與畫質。請保持本 App 在前景。")
                     .font(.caption).foregroundStyle(.secondary)
                 rescanButton
             } else {
@@ -260,16 +262,16 @@ private struct DownloadJobRow: View {
                 }
                 if job.status?.terminal == true || job.request.requiresSelection != true || job.status?.phase == "awaitingSelection" {
                     if job.request.selection != nil && ["failed", "cancelled"].contains(job.status?.phase ?? "") {
-                        Button("重試／續傳相同任務", systemImage: "arrow.clockwise") { Task { await model.retry(job.id) } }
+                        Button(model.fast ? "重試／續傳相同任務" : "以 FFmpeg 重新下載", systemImage: "arrow.clockwise") { Task { await model.retry(job.id) } }
                         if let output = job.request.outputProfile, !["original", "auto"].contains(output) {
-                            Button("改用原編碼重試（沿用軌道暫存）") { Task { await model.retry(job.id, original: true) } }
+                            Button(model.fast ? "改用原編碼重試（沿用軌道暫存）" : "改用原編碼重新下載") { Task { await model.retry(job.id, original: true) } }
                         }
                     }
                     rescanButton
                 } else {
                     if model.working {
                         Button("取消任務", role: .destructive) { Task { await model.cancel(job.id) } }
-                        Text("取消會保留可續傳的軌道暫存，不匯入未完成檔案。")
+                        Text(model.fast ? "取消會保留可續傳的軌道暫存，不匯入未完成檔案。" : "取消後不匯入未完成檔案；重試時 FFmpeg 會重新下載。")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         // A killed app cannot keep executing native FFmpeg. An
@@ -292,12 +294,14 @@ private struct DownloadSetupView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("下載效能") {
-                    Toggle("分段加速與續傳", isOn: $model.fast)
+                Section("下載方式") {
+                    Label(model.fast ? "yt-dlp 分段下載（選用）" : "FFmpeg 直接下載（預設）", systemImage: "arrow.down.circle")
+                    Toggle("改用 yt-dlp 分段下載", isOn: $model.fast)
+                        .accessibilityIdentifier("enableYTDLPTransfer")
                     Picker("同時下載分段數", selection: $model.connections) {
                         ForEach([1, 2, 4, 8], id: \.self) { Text("\($0) 段").tag($0) }
                     }.disabled(!model.fast)
-                    Text("預設 4 段，適用原生 HLS／DASH 分段下載；一般 HTTP 檔案不會強制分塊。網路或平台限流時可降為 1–2 段。關閉後使用直接 FFmpeg 原編碼下載。")
+                    Text("預設由 FFmpeg 下載、合併與轉檔，yt-dlp 只解析平台連結。只有主動開啟這個選項，才改由 yt-dlp 下載分段並支援其續傳機制。FFmpeg 模式重試會重新下載，不保證接續原本的暫存。")
                 }
                 Section("App 內建引擎") {
                     Label(model.ready ? "內建 FFmpeg 已就緒" : "引擎檢查中／未就緒", systemImage: model.ready ? "checkmark.circle.fill" : "gearshape")

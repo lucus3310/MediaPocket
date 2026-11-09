@@ -241,7 +241,7 @@ actor DownloadStore {
         return request
     }
 
-    func retry(_ id: UUID, original: Bool = false) throws -> DownloadRequest {
+    func retry(_ id: UUID, original: Bool = false, fast: Bool? = nil) throws -> DownloadRequest {
         let slot = jobDirectory(id)
         var request = try JSONDecoder().decode(DownloadRequest.self, from: Data(contentsOf: slot.appending(path: "request.json")))
         let status = try JSONDecoder().decode(DownloadStatus.self, from: Data(contentsOf: slot.appending(path: "status.json")))
@@ -250,9 +250,10 @@ actor DownloadStore {
               !files.fileExists(atPath: slot.appending(path: "imported.json").path) else { throw DownloadError.invalidSelection }
         request.attempt = (request.attempt ?? 0) + 1
         if original { request.outputProfile = "original" }
+        if let fast { request.transferMode = fast ? "fast" : nil }
         if files.fileExists(atPath: slot.appending(path: "cancel").path) { try files.removeItem(at: slot.appending(path: "cancel")) }
         try JSONEncoder().encode(request).write(to: slot.appending(path: "request.json"), options: .atomic)
-        let queued = DownloadStatus(phase: "queued", message: "正在重試；相同來源格式的暫存會嘗試續傳。", token: request.token, updated: Date().timeIntervalSince1970)
+        let queued = DownloadStatus(phase: "queued", message: request.transferMode == "fast" ? "正在重試；相同來源格式的暫存會嘗試續傳。" : "FFmpeg 將重新讀取來源下載。", token: request.token, updated: Date().timeIntervalSince1970)
         try JSONEncoder().encode(queued).write(to: slot.appending(path: "status.json"), options: .atomic)
         return request
     }

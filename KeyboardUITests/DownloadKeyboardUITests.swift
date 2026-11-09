@@ -4,7 +4,9 @@ final class DownloadKeyboardUITests: XCTestCase {
     @MainActor
     func testDismissKeyboardKeepsLinkAndSetupIsActionable() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
+        // Upgrading an installation with the old implicit fast default must
+        // still start with FFmpeg; it must not opt into yt-dlp transfers.
+        app.launchArguments += ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW", "-fastDownloads", "YES"]
         app.launch()
         let tab = app.buttons["下載"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10))
@@ -48,6 +50,8 @@ final class DownloadKeyboardUITests: XCTestCase {
         app.buttons["下載設定"].tap()
         XCTAssertTrue(app.navigationBars["下載設定"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["內建 FFmpeg 已就緒"].exists)
+        XCTAssertTrue(app.staticTexts["FFmpeg 直接下載（預設）"].exists)
+        XCTAssertEqual(app.switches["enableYTDLPTransfer"].value as? String, "0")
         XCTAssertFalse(app.buttons["1. 授權下載交接資料夾"].exists)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
     }
