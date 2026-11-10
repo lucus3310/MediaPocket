@@ -476,31 +476,18 @@ class FFmpegIntegration(unittest.TestCase):
             numerator, denominator = map(int, video["avg_frame_rate"].split("/"))
             self.assertEqual(numerator / denominator, fps)
 
-    def test_interrupted_fast_download_resumes_http_range(self):
+    def test_legacy_fast_mode_uses_ffmpeg_only(self):
         job_id, slot = self.request()
         request = json.loads((slot / "request.json").read_text())
         request.update(transferMode="fast", outputProfile="original", connections=4)
         runner.atomic_json(slot / "request.json", request)
-        real_transfer = runner.engine.download_tracks
-        def interrupted(ydl, entry, cache, connections, update, check_cancel):
-            def on_progress(**values):
-                update(**values)
-                if values.get("progress", 0) and values["progress"] < 0.8:
-                    (slot / "cancel").touch()
-            return real_transfer(ydl, entry, cache, connections, on_progress, check_cancel)
-        with patch.object(runner.engine, "download_tracks", interrupted):
+        with patch.object(runner.engine, "download_tracks", side_effect=AssertionError("yt-dlp transfer must not run")):
             runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
-        self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "cancelled")
-        self.assertTrue(list((slot / "tracks").glob("*.part")))
-        (slot / "cancel").unlink()
-        request["attempt"] = 1
-        runner.atomic_json(slot / "request.json", request)
-        runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
         status = json.loads((slot / "status.json").read_text())
         self.assertEqual(status["phase"], "complete", status)
-        self.assertTrue(self.server.range_requests)
+        self.assertTrue(list((slot / "output").glob("*")))
 
-    def test_http_failure_never_publishes_outputs(self):
+        def test_http_failure_never_publishes_outputs(self):
         @contextlib.contextmanager
         def rejected(request, bridge):
             with self.extraction(request, bridge) as (ydl, entries):
