@@ -275,6 +275,25 @@ def apply_selection(entries, catalog, selection):
     return selected_entries
 
 
+def ffmpeg_failure_message(slot):
+    """Present useful diagnostics without exposing signed URLs or HTTP cookies."""
+    source = slot / "ffmpeg-error.txt"
+    message = source.read_text(encoding="utf-8", errors="replace")[-10000:].lower() if source.is_file() else ""
+    if "protocol not found" in message or "https protocol not found" in message:
+        return "內建 FFmpeg 缺少 HTTPS 下載協定。請安裝含 TLS 支援的新版 IPA。"
+    if "unknown option" in message or "option not found" in message:
+        return "內建 FFmpeg 不支援下載所需的參數。請更新 App，並在任務資料夾查看 ffmpeg-error.txt。"
+    if any(code in message for code in ("403 forbidden", "http error 403", "server returned 403", "401 unauthorized", "server returned 401")):
+        return "影音來源拒絕存取（HTTP 401／403）。請重新取得畫質，並確認登入與來源權限。"
+    if any(code in message for code in ("404 not found", "server returned 404", "http error 404", "410 gone")):
+        return "影音來源已失效（HTTP 404／410）。請重新取得畫質，避免使用過期連結。"
+    if "certificate verify failed" in message or "tls handshake failed" in message:
+        return "HTTPS 憑證或 TLS 握手失敗。請檢查裝置日期、網路與內建 FFmpeg TLS 支援。"
+    if "no space left on device" in message:
+        return "iPhone 儲存空間不足。請騰出空間後再下載。"
+    return "FFmpeg 下載失敗。請重新取得畫質；若仍失敗，可在「檔案」App 的 MediaPocketBridge/jobs 任務資料夾找到 ffmpeg-error.txt 排查（可能含私人網址，請勿直接公開）。"
+
+
 def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
     allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie", "authorization", "range"}
@@ -485,7 +504,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 if result:
                     if staged:
                         raise ValueError("FFmpeg 合併／轉碼失敗，已保留軌道暫存。請改用原編碼重試，或檢查裝置編碼器及可用空間；詳細錯誤在任務資料夾的 ffmpeg-error.txt。")
-                    raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
+                    raise ValueError(ffmpeg_failure_message(slot))
                 expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
                 verify_output(runtime, temporary, request["audioOnly"], slot, expected_audio)
                 os.replace(temporary, final)
