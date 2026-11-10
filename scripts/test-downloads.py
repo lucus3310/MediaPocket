@@ -170,6 +170,20 @@ class QualityCatalogTests(unittest.TestCase):
         best = runner.apply_selection(entries, catalog, "video:best")
         self.assertEqual([entry["requested_formats"][0]["height"] for entry in best], [1080, 720])
 
+    def test_fragment_only_dash_is_not_offered_by_ffmpeg_only_catalog(self):
+        entry = self.entry()
+        entry["formats"].append({
+            "format_id": "fragmented-8k", "height": 4320,
+            "vcodec": "av01", "acodec": "none", "ext": "mp4",
+            "protocol": "http_dash_segments",
+            "url": "https://cdn.test/fragmented",
+            "fragments": [{"url": "https://cdn.test/part1.m4s"}]
+        })
+        catalog = runner.quality_catalog([entry], "token")
+        self.assertFalse(any(option.get("height") == 4320
+                             for option in catalog["options"]))
+        self.assertEqual(runner.apply_selection([entry], catalog, "video:best")[0]["requested_formats"][0]["height"], 1080)
+
     def test_stale_resolution_and_changed_post_never_silently_downgrade(self):
         catalog = runner.quality_catalog([self.entry()], "token")
         for entries, selection in [([self.entry(heights=(360,))], "video:1080"),
@@ -516,7 +530,7 @@ if __name__ == "__main__":
         "checks": ["four platform URL routing", "strict Threads post matching", "HTTP auth headers",
                    "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion",
                    "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection",
-                   "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "HTTP Range resume",
+                   "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "FFmpeg-only excludes fragment-only DASH",
                    "MP4 H264 M4A MP3 FLAC WAV", "cache cleanup", "FFmpeg direct profiles forbid yt-dlp transfers"]
     })
     raise SystemExit(not result.wasSuccessful())
