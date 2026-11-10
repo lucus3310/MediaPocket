@@ -211,7 +211,9 @@ def resolution(fmt):
 
 
 def quality_catalog(entries, token):
-    return engine.catalog(entries, token)
+    # Schema 2 must never include fragmented-only formats which FFmpeg cannot
+    # open using their single format URL. Keep probe and transfer equivalent.
+    return engine.catalog(direct_entries(entries), token)
 
 
 def direct_entries(entries):
@@ -245,7 +247,10 @@ def legacy_quality_catalog(entries, token):
 
 def apply_selection(entries, catalog, selection):
     if catalog.get("schema") == 2:
-        return engine.apply(entries, catalog, selection)
+        # Probe excludes fragmented-only transports. Apply that same direct
+        # FFmpeg filter when selecting a format; engine.apply would otherwise
+        # reintroduce unsupported DASH fragments for video:best.
+        return engine.apply(direct_entries(entries), catalog, selection)
     if catalog.get("schema") != 1 or catalog.get("identities") != [str(entry.get("id", index)) for index, entry in enumerate(entries)]:
         raise ValueError("貼文內容已變更，請在 App 重新取得可用畫質。")
     option = next((item for item in catalog["options"] if item["id"] == selection), None)
@@ -273,9 +278,28 @@ def apply_selection(entries, catalog, selection):
     return selected_entries
 
 
+def ffmpeg_failure_message(slot):
+    """Present useful diagnostics without exposing signed URLs or HTTP cookies."""
+    source = slot / "ffmpeg-error.txt"
+    message = source.read_text(encoding="utf-8", errors="replace")[-10000:].lower() if source.is_file() else ""
+    if "protocol not found" in message or "https protocol not found" in message:
+        return "內建 FFmpeg 缺少 HTTPS 下載協定。請安裝含 TLS 支援的新版 IPA。"
+    if "unknown option" in message or "option not found" in message:
+        return "內建 FFmpeg 不支援下載所需的參數。請更新 App，並在任務資料夾查看 ffmpeg-error.txt。"
+    if any(code in message for code in ("403 forbidden", "http error 403", "server returned 403", "401 unauthorized", "server returned 401")):
+        return "影音來源拒絕存取（HTTP 401／403）。請重新取得畫質，並確認登入與來源權限。"
+    if any(code in message for code in ("404 not found", "server returned 404", "http error 404", "410 gone")):
+        return "影音來源已失效（HTTP 404／410）。請重新取得畫質，避免使用過期連結。"
+    if "certificate verify failed" in message or "tls handshake failed" in message:
+        return "HTTPS 憑證或 TLS 握手失敗。請檢查裝置日期、網路與內建 FFmpeg TLS 支援。"
+    if "no space left on device" in message:
+        return "iPhone 儲存空間不足。請騰出空間後再下載。"
+    return "FFmpeg 下載失敗。請重新取得畫質；若仍失敗，可在「檔案」App 的 MediaPocketBridge/jobs 任務資料夾找到 ffmpeg-error.txt 排查（可能含私人網址，請勿直接公開）。"
+
+
 def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
-    allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie"}
+    allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie", "authorization", "range"}
     for _, url, headers in inputs:
         lines = []
         for name, value in headers.items():
@@ -284,7 +308,7 @@ def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
             if "\r" in str(value) or "\n" in str(value):
                 raise ValueError("來源 HTTP 標頭格式錯誤。")
             lines.append(f"{name}: {value}\r\n")
-        args += ["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "30000000",
+        args += ["-protocol_whitelist", "file,http,https,tcp,tls,crypto", "-rw_timeout", "30000000",
                  "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
         if lines:
             args += ["-headers", "".join(lines)]
@@ -385,8 +409,9 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         if probe:
             update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後可選擇畫質。")
             with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
-                if request.get("transferMode") != "fast":
-                    entries = direct_entries(entries)
+                # Never advertise yt-dlp fragment-only formats when all actual
+                # transfers are performed directly by the embedded FFmpeg.
+                entries = direct_entries(entries)
                 catalog = quality_catalog(entries, token)
                 check_cancel()
                 atomic_json(slot / "catalog.json", catalog)
@@ -409,7 +434,8 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 raise ValueError("任務輸出目錄含有非預期檔案，請建立新任務。")
             old.unlink()
         outputs = []
-        staged = request.get("transferMode") == "fast"
+        # All legacy jobs use FFmpeg for transfer; yt-dlp remains metadata-only.
+        staged = False
         advanced = staged or request.get("outputProfile") not in (None, "original")
         encoders = engine.encoder_set(runtime, slot) if advanced else set()
         cache = slot / "tracks"
@@ -418,8 +444,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
             if cache.is_symlink(): raise ValueError("暫存資料夾不正確。")
         with extraction(request, bridge) as (ydl, entries):
             if request.get("requiresSelection"):
-                if not staged:
-                    entries = direct_entries(entries)
+                entries = direct_entries(entries)
                 catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
                 if catalog.get("token") != token:
                     raise ValueError("畫質清單不屬於此任務，請重新解析。")
@@ -482,7 +507,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                 if result:
                     if staged:
                         raise ValueError("FFmpeg 合併／轉碼失敗，已保留軌道暫存。請改用原編碼重試，或檢查裝置編碼器及可用空間；詳細錯誤在任務資料夾的 ffmpeg-error.txt。")
-                    raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
+                    raise ValueError(ffmpeg_failure_message(slot))
                 expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
                 verify_output(runtime, temporary, request["audioOnly"], slot, expected_audio)
                 os.replace(temporary, final)

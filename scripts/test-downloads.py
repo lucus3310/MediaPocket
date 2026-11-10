@@ -170,6 +170,20 @@ class QualityCatalogTests(unittest.TestCase):
         best = runner.apply_selection(entries, catalog, "video:best")
         self.assertEqual([entry["requested_formats"][0]["height"] for entry in best], [1080, 720])
 
+    def test_fragment_only_dash_is_not_offered_by_ffmpeg_only_catalog(self):
+        entry = self.entry()
+        entry["formats"].append({
+            "format_id": "fragmented-8k", "height": 4320,
+            "vcodec": "av01", "acodec": "none", "ext": "mp4",
+            "protocol": "http_dash_segments",
+            "url": "https://cdn.test/fragmented",
+            "fragments": [{"url": "https://cdn.test/part1.m4s"}]
+        })
+        catalog = runner.quality_catalog([entry], "token")
+        self.assertFalse(any(option.get("height") == 4320
+                             for option in catalog["options"]))
+        self.assertEqual(runner.apply_selection([entry], catalog, "video:best")[0]["requested_formats"][0]["height"], 1080)
+
     def test_stale_resolution_and_changed_post_never_silently_downgrade(self):
         catalog = runner.quality_catalog([self.entry()], "token")
         for entries, selection in [([self.entry(heights=(360,))], "video:1080"),
@@ -476,29 +490,16 @@ class FFmpegIntegration(unittest.TestCase):
             numerator, denominator = map(int, video["avg_frame_rate"].split("/"))
             self.assertEqual(numerator / denominator, fps)
 
-    def test_interrupted_fast_download_resumes_http_range(self):
+    def test_legacy_fast_mode_uses_ffmpeg_only(self):
         job_id, slot = self.request()
         request = json.loads((slot / "request.json").read_text())
         request.update(transferMode="fast", outputProfile="original", connections=4)
         runner.atomic_json(slot / "request.json", request)
-        real_transfer = runner.engine.download_tracks
-        def interrupted(ydl, entry, cache, connections, update, check_cancel):
-            def on_progress(**values):
-                update(**values)
-                if values.get("progress", 0) and values["progress"] < 0.8:
-                    (slot / "cancel").touch()
-            return real_transfer(ydl, entry, cache, connections, on_progress, check_cancel)
-        with patch.object(runner.engine, "download_tracks", interrupted):
+        with patch.object(runner.engine, "download_tracks", side_effect=AssertionError("yt-dlp transfer must not run")):
             runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
-        self.assertEqual(json.loads((slot / "status.json").read_text())["phase"], "cancelled")
-        self.assertTrue(list((slot / "tracks").glob("*.part")))
-        (slot / "cancel").unlink()
-        request["attempt"] = 1
-        runner.atomic_json(slot / "request.json", request)
-        runner.run_job(self.bridge, job_id, self.runtime, self.advanced_extraction)
         status = json.loads((slot / "status.json").read_text())
         self.assertEqual(status["phase"], "complete", status)
-        self.assertTrue(self.server.range_requests)
+        self.assertTrue(list((slot / "output").glob("*")))
 
     def test_http_failure_never_publishes_outputs(self):
         @contextlib.contextmanager
@@ -529,7 +530,7 @@ if __name__ == "__main__":
         "checks": ["four platform URL routing", "strict Threads post matching", "HTTP auth headers",
                    "FFmpeg separate-track merge", "HLS", "audio-only", "failure/cancel", "idempotent completion",
                    "probe without transfer", "actual quality catalog", "App selection then FFmpeg", "stale selection rejection",
-                   "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "HTTP Range resume",
+                   "4K60 and 8K preserved", "fps codec HDR selection", "fast native HLS", "FFmpeg-only excludes fragment-only DASH",
                    "MP4 H264 M4A MP3 FLAC WAV", "cache cleanup", "FFmpeg direct profiles forbid yt-dlp transfers"]
     })
     raise SystemExit(not result.wasSuccessful())

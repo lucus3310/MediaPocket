@@ -8,11 +8,8 @@ final class DownloadCenterModel {
     var setup: DownloadStatus?
     var error: String?
     var working = false
-    // The old fastDownloads default enabled yt-dlp transfers without an explicit
-    // choice. A new key requires opt-in, including when upgrading an old install.
-    var fast = UserDefaults.standard.object(forKey: "enableYTDLPTransfer") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(fast, forKey: "enableYTDLPTransfer") }
-    }
+    // FFmpeg is the sole transfer engine. Ignore any legacy yt-dlp preference.
+    var fast = false
     var connections = UserDefaults.standard.object(forKey: "downloadConnections") as? Int ?? 4 {
         didSet { UserDefaults.standard.set(connections, forKey: "downloadConnections") }
     }
@@ -251,7 +248,7 @@ private struct DownloadJobRow: View {
                 Button("開始下載與合併", systemImage: "arrow.down.circle.fill") {
                     Task { await model.download(job, optionID: selection, profile: outputProfile) }
                 }.disabled(model.working || selection.isEmpty)
-                Text(model.fast ? "目前使用 yt-dlp 下載軌道，再由 FFmpeg 合併／轉檔。可在設定關閉此選用模式。" : "FFmpeg 直接連線下載影音，並合併／轉檔；yt-dlp 只解析來源與畫質。請保持本 App 在前景。")
+                Text("FFmpeg 直接連線下載影音，並合併／轉檔；yt-dlp 只解析來源與畫質。請保持本 App 在前景。")
                     .font(.caption).foregroundStyle(.secondary)
                 rescanButton
             } else {
@@ -271,7 +268,7 @@ private struct DownloadJobRow: View {
                 } else {
                     if model.working {
                         Button("取消任務", role: .destructive) { Task { await model.cancel(job.id) } }
-                        Text(model.fast ? "取消會保留可續傳的軌道暫存，不匯入未完成檔案。" : "取消後不匯入未完成檔案；重試時 FFmpeg 會重新下載。")
+                        Text("取消後不匯入未完成檔案；重試時 FFmpeg 會重新下載。")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         // A killed app cannot keep executing native FFmpeg. An
@@ -295,13 +292,8 @@ private struct DownloadSetupView: View {
         NavigationStack {
             Form {
                 Section("下載方式") {
-                    Label(model.fast ? "yt-dlp 分段下載（選用）" : "FFmpeg 直接下載（預設）", systemImage: "arrow.down.circle")
-                    Toggle("改用 yt-dlp 分段下載", isOn: $model.fast)
-                        .accessibilityIdentifier("enableYTDLPTransfer")
-                    Picker("同時下載分段數", selection: $model.connections) {
-                        ForEach([1, 2, 4, 8], id: \.self) { Text("\($0) 段").tag($0) }
-                    }.disabled(!model.fast)
-                    Text("預設由 FFmpeg 下載、合併與轉檔，yt-dlp 只解析平台連結。只有主動開啟這個選項，才改由 yt-dlp 下載分段並支援其續傳機制。FFmpeg 模式重試會重新下載，不保證接續原本的暫存。")
+                    Label("FFmpeg 直接下載", systemImage: "arrow.down.circle")
+                    Text("所有影片均由內建 FFmpeg 下載、合併與轉檔；yt-dlp 只解析平台連結及可用畫質。下載失敗時重新取得畫質再試；不提供舊版 yt-dlp 分段下載模式。")
                 }
                 Section("App 內建引擎") {
                     Label(model.ready ? "內建 FFmpeg 已就緒" : "引擎檢查中／未就緒", systemImage: model.ready ? "checkmark.circle.fill" : "gearshape")
@@ -318,7 +310,7 @@ private struct DownloadSetupView: View {
                     Text("Netscape Cookie 檔放進「MediaPocket → MediaPocketBridge → cookies」，命名為 youtube.txt、instagram.txt、threads.txt、bilibili.txt、tiktok.txt、x.txt、vimeo.txt 或 dailymotion.txt。Cookie 留在手機；不處理 DRM。")
                 }
                 Section("下載成品") {
-                    Text("完成並驗證軌道後，自動加入「檔案庫 → App 內檔案 → Downloads」，可直接管理和播放。分段模式在合併期間需要軌道暫存與成品空間；成功後清理暫存，失敗時保留供續傳。已加入來源資料夾仍從原位置讀取，不複製原影片。")
+                    Text("完成並驗證軌道後，自動加入「檔案庫 → App 內檔案 → Downloads」，可直接管理和播放。下載過程需要足夠的空間存放暫存與成品；已加入來源資料夾仍從原位置讀取，不複製原影片。")
                 }
             }.navigationTitle("下載設定")
                 .toolbar { Button("完成") { dismiss() } }

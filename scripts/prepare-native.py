@@ -18,6 +18,10 @@ SOURCES = {
                'cc005b9c0c1916907537b7b7476c14d576fb147327a0a173e2686201a3611188'),
 }
 for name, (url, digest) in SOURCES.items():
+    expected = DEST / ('Python.xcframework' if name == 'python' else 'FFmpegKit')
+    # A cached TLS-enabled build must not be overwritten by the upstream binary.
+    if name == 'ffmpeg' and (expected / '.mediapocket-https-enabled').is_file():
+        continue
     archive = DEST / (name + '.tar.gz')
     if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
         with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'MediaPocket-Native'}), timeout=180) as response, archive.open('wb') as output:
@@ -34,6 +38,45 @@ for name, (url, digest) in SOURCES.items():
             bundle.extractall(DEST, filter='data')
         if name == 'ffmpeg':
             (DEST / 'ffmpeg-kit-0bd85df8f9693061f6f979414662baaf876a3e20').rename(expected)
+
+# The pinned upstream XCFramework is intentionally built with SecureTransport
+# disabled. As a result it cannot open normal https:// media URLs even though
+# localhost HTTP fixtures pass. Rebuild the same audited source for iOS with
+# Apple's system TLS backend; no external OpenSSL or yt-dlp transfer is used.
+ffmpeg_root = DEST / 'FFmpegKit'
+tls_stamp = ffmpeg_root / '.mediapocket-https-enabled'
+if not tls_stamp.is_file():
+    configure = ffmpeg_root / 'scripts/apple/ffmpeg.sh'
+    script = configure.read_text()
+    disabled = '  --disable-securetransport ' + chr(92) + chr(10)
+    enabled = '  --enable-securetransport ' + chr(92) + chr(10)
+    if disabled not in script:
+        raise RuntimeError('Pinned FFmpeg source no longer contains expected TLS configuration')
+    configure.write_text(script.replace(disabled, enabled, 1))
+    # The pinned source archive has no .git folder, but ios.sh uses git describe.
+    if not (ffmpeg_root / '.git').exists():
+        subprocess.run(['git', 'init', '-q'], cwd=ffmpeg_root, check=True)
+        subprocess.run(['git', '-c', 'user.name=MediaPocket CI',
+                        '-c', 'user.email=ci@invalid.example', 'commit', '-q',
+                        '--allow-empty', '-m', 'Pinned HTTPS FFmpeg build'],
+                       cwd=ffmpeg_root, check=True)
+    subprocess.run(['bash', 'ios.sh', '--no-bitcode', '--disable-x86-64'],
+                   cwd=ffmpeg_root, check=True)
+    built = ffmpeg_root / 'prebuilt/bundle-apple-xcframework-ios'
+    frameworks = ['ffmpegkit', 'libavcodec', 'libavdevice', 'libavfilter',
+                  'libavformat', 'libavutil', 'libswresample', 'libswscale']
+    for name in frameworks:
+        source = built / (name + '.xcframework')
+        target = ffmpeg_root / 'Frameworks' / source.name
+        if not source.is_dir():
+            raise RuntimeError('TLS FFmpeg build did not produce ' + source.name)
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+    tls_stamp.write_text('SecureTransport enabled, ios.sh --no-bitcode --disable-x86-64\\n')
+    # The package only consumes Sources/ and Frameworks/, not build objects.
+    for directory in ('.tmp', 'src', 'prebuilt'):
+        shutil.rmtree(ffmpeg_root / directory, ignore_errors=True)
 
 # Resolve FFmpeg symbols from its own framework/dependencies rather than another
 # player's bundled FFmpeg, while keeping the upstream serial execution API.

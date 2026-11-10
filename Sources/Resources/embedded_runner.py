@@ -40,7 +40,21 @@ def health(root, runtime):
             raise RuntimeError('內建 FFmpeg 未能啟動。')
         if 'aac' not in (root / 'native-encoders.txt').read_text():
             raise RuntimeError('內建 FFmpeg 編碼器清單無法讀取。')
-        status.update(phase='ready', message='App 內建 FFmpeg 與 yt-dlp 已就緒，可直接貼連結選畫質。')
+        # Use a closed loopback port to exercise the HTTPS protocol resolver.
+        # A connection-refused exit is EXPECTED; "Protocol not found" is not.
+        # This avoids depending on a public website for each app launch.
+        probe_error = root / 'native-https-check.txt'
+        runtime.run(['ffmpeg', '-hide_banner', '-nostdin', '-loglevel', 'error',
+                     '-rw_timeout', '1000000', '-i',
+                     'https://127.0.0.1:1/mediapocket-health-check',
+                     '-f', 'null', '-'],
+                    root / 'native-https-output.txt', probe_error)
+        diagnostic = probe_error.read_text(errors='replace').lower() if probe_error.is_file() else ''
+        if 'protocol not found' in diagnostic:
+            raise RuntimeError('iOS 內建 FFmpeg 缺少 HTTPS／TLS 支援，無法下載網路影片。請重新編譯安裝支援 SecureTransport 的 IPA。')
+        if not diagnostic:
+            raise RuntimeError('無法確認內建 FFmpeg 的 HTTPS 能力，請查看 native-https-check.txt。')
+        status.update(phase='ready', message='內建 FFmpeg HTTPS 下載協定與 yt-dlp 解析器已就緒。')
     except Exception as error:
         status.update(phase='failed', message=runner.safe_error(error))
     status['updated'] = time.time()

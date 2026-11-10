@@ -26,7 +26,8 @@ jobs:
   build:
     # This is a STANDARD public-repository runner, not a paid larger runner.
     runs-on: xcode-27
-    timeout-minutes: 60
+    # TLS-capable FFmpeg must be compiled from source for iOS; allow the first build.
+    timeout-minutes: 180
     steps:
       - name: Require a public repository for the zero-cost build
         env:
