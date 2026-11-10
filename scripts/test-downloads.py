@@ -487,7 +487,7 @@ class FFmpegIntegration(unittest.TestCase):
         self.assertEqual(status["phase"], "complete", status)
         self.assertTrue(list((slot / "output").glob("*")))
 
-        def test_http_failure_never_publishes_outputs(self):
+    def test_http_failure_never_publishes_outputs(self):
         @contextlib.contextmanager
         def rejected(request, bridge):
             with self.extraction(request, bridge) as (ydl, entries):
