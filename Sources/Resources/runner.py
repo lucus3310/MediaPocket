@@ -247,7 +247,10 @@ def legacy_quality_catalog(entries, token):
 
 def apply_selection(entries, catalog, selection):
     if catalog.get("schema") == 2:
-        return engine.apply(entries, catalog, selection)
+        # Probe excludes fragmented-only transports. Apply that same direct
+        # FFmpeg filter when selecting a format; engine.apply would otherwise
+        # reintroduce unsupported DASH fragments for video:best.
+        return engine.apply(direct_entries(entries), catalog, selection)
     if catalog.get("schema") != 1 or catalog.get("identities") != [str(entry.get("id", index)) for index, entry in enumerate(entries)]:
         raise ValueError("貼文內容已變更，請在 App 重新取得可用畫質。")
     option = next((item for item in catalog["options"] if item["id"] == selection), None)
