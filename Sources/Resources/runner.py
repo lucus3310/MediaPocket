@@ -211,7 +211,9 @@ def resolution(fmt):
 
 
 def quality_catalog(entries, token):
-    return engine.catalog(entries, token)
+    # Schema 2 must never include fragmented-only formats which FFmpeg cannot
+    # open using their single format URL. Keep probe and transfer equivalent.
+    return engine.catalog(direct_entries(entries), token)
 
 
 def direct_entries(entries):
@@ -385,8 +387,9 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
         if probe:
             update(phase="scanning", message="yt-dlp 正在取得可用畫質，完成後可選擇畫質。")
             with extraction(dict(request, quality="best", audioOnly=False), bridge) as (_, entries):
-                if request.get("transferMode") != "fast":
-                    entries = direct_entries(entries)
+                # Never advertise yt-dlp fragment-only formats when all actual
+                # transfers are performed directly by the embedded FFmpeg.
+                entries = direct_entries(entries)
                 catalog = quality_catalog(entries, token)
                 check_cancel()
                 atomic_json(slot / "catalog.json", catalog)
@@ -419,8 +422,7 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
             if cache.is_symlink(): raise ValueError("暫存資料夾不正確。")
         with extraction(request, bridge) as (ydl, entries):
             if request.get("requiresSelection"):
-                if not staged:
-                    entries = direct_entries(entries)
+                entries = direct_entries(entries)
                 catalog = json.loads((slot / "catalog.json").read_text(encoding="utf-8"))
                 if catalog.get("token") != token:
                     raise ValueError("畫質清單不屬於此任務，請重新解析。")
