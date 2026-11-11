@@ -103,6 +103,8 @@ App 建議只初始化一次，專用背景序列佇列持有 Python 工作；�
 
 ## 2. FFmpeg：jaywcjlove/ffmpeg-kit 的固定版本
 
+2026-11-11 補正：下列預編譯檔的原始封裝與 ABI 查核沒有驗證 HTTPS。0.10.2 實際交付的 libavformat 關閉了 SecureTransport 與 OpenSSL，缺少平台下載需要的 TLS 後端；本機 HTTP 樣本無法發現此問題。從 0.10.3 起，`scripts/enable-native-https.py` 使用固定來源開啟 SecureTransport，只替換 ABI 相符的 ARM64 libavformat，保留既有 codec／CLI 函式庫。打包檢查實際編譯設定，啟動時以原生 API 枚舉 `https`／`tls`，並要求真正的模擬器 HTTPS 下載測試。重建來源版本、configure SHA-256 與產物雜湊記錄於 `Native-LICENSES/native-build.json`；詳見 [問題診斷與驗證](download-diagnosis-v0.10.3.md)。
+
 固定 revision：`0bd85df8f9693061f6f979414662baaf876a3e20`。
 
 此 fork 的 [Package.swift](https://github.com/jaywcjlove/ffmpeg-kit/blob/0bd85df8f9693061f6f979414662baaf876a3e20/Package.swift) 宣告 iOS 12+、Swift tools 5.9，實際 product/module 名稱為 **`ffmpegkit` 小寫**；Swift target 依賴 `CFFmpegBridge`。八個 binary targets 直接指向 repo 中的 XCFramework：`ffmpegkit`、`libavcodec`、`libavdevice`、`libavfilter`、`libavformat`、`libavutil`、`libswresample`、`libswscale`。

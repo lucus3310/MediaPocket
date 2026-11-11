@@ -2,7 +2,7 @@
 
 以 SwiftUI 製作的個人 iPhone 影音工具。目標是整合本機檔案管理、多格式播放，以及透過 FFmpeg 處理平台影音下載。
 
-目前版本 **0.10.2（13）** 預設由 App 內 FFmpeg 直接下載、合併及轉檔，yt-dlp 只解析平台連結與畫質。升級時不沿用舊版自動開啟的分段下載預設。FFmpeg、ffprobe、CPython 與 yt-dlp 隨 App 安裝，無須 a-Shell 或捷徑；保留鍵盤收合與解析器防跳轉修正。見 [0.10.2 操作與限制](docs/tryout-v0.10.2.md)。
+目前版本 **0.10.3（14）** 修正內建 FFmpeg 缺少 HTTPS／TLS 的缺陷：舊版能解析畫質，卻無法由 FFmpeg 讀取 HTTPS 媒體。新版重建支援 Apple SecureTransport 的 libavformat，啟動檢查實際協定，並加入憑證驗證的原生 HTTPS 下載測試。預設仍由 App 內 FFmpeg 下載、合併與轉檔，yt-dlp 解析平台連結與畫質，無須 a-Shell 或捷徑。保留鍵盤收合、防跳轉、原位置檔案管理及播放器。見 [問題診斷、修正與驗證](docs/download-diagnosis-v0.10.3.md)。
 
 在 App 貼連結，解析後可按解析度、fps、編碼篩選來源，選輸出格式，再由內建 yt-dlp 與 FFmpeg 下載、合併及需要時轉碼，完成後直接管理／播放。保留原位置檔案管理、來源資料夾書籤、逐幀、8 倍縮放及雙播放引擎。0.9 的外部工具架構僅保留為歷史文件。
 
