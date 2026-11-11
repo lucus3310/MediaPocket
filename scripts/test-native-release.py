@@ -16,6 +16,7 @@ identifier = device['udid']
 if device['state'] != 'Booted':
     run('xcrun', 'simctl', 'boot', identifier)
 run('xcrun', 'simctl', 'bootstatus', identifier, '-b', timeout=240)
+run('xcrun', 'simctl', 'keychain', identifier, 'add-root-cert', 'build/https-fixture/localhost-cert.cer')
 # Release must produce new reports; a zero-test run cannot reuse Debug evidence.
 lookup = subprocess.run(['xcrun', 'simctl', 'get_app_container', identifier,
                          'io.github.lucus3310.MediaPocket', 'data'], capture_output=True, text=True)

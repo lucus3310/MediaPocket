@@ -36,8 +36,12 @@ def package_app(app: Path, output: Path) -> None:
             raise ValueError('Incomplete embedded engine: ' + name)
     if list(app.rglob('*.so')):
         raise ValueError('Python binary extension was not converted to an iOS framework')
+    if b'--enable-securetransport' not in (app / 'Frameworks/libavformat.framework/libavformat').read_bytes():
+        raise ValueError('Refusing to ship FFmpeg without the required HTTPS backend')
     if (app / 'native_engine_smoke.py').exists():
         raise ValueError('Debug download fixture must not ship in the device release')
+    if any((app / name).exists() for name in ['localhost-cert.pem', 'localhost-key.pem']):
+        raise ValueError('Loopback TLS test certificates must not ship in the device release')
 
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

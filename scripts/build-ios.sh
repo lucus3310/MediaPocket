@@ -11,6 +11,7 @@ xcodebuild -version
 xcodebuild -showsdks
 swift test --parallel
 python3 scripts/prepare-native.py
+python3 scripts/create-https-fixture.py
 xcodegen generate --spec project.yml
 
 # Use the same source settings for Simulator and iPhone, with no Apple account

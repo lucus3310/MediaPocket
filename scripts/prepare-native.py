@@ -35,6 +35,8 @@ for name, (url, digest) in SOURCES.items():
         if name == 'ffmpeg':
             (DEST / 'ffmpeg-kit-0bd85df8f9693061f6f979414662baaf876a3e20').rename(expected)
 
+subprocess.run([sys.executable, str(ROOT / 'scripts/enable-native-https.py'), str(DEST / 'FFmpegKit')], check=True)
+
 # Resolve FFmpeg symbols from its own framework/dependencies rather than another
 # player's bundled FFmpeg, while keeping the upstream serial execution API.
 bridge = DEST / 'FFmpegKit/Sources/CFFmpegBridge/CFFmpegBridge.c'

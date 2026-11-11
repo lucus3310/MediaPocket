@@ -3,6 +3,7 @@ import contextlib
 import functools
 import http.server
 import json
+import ssl
 from pathlib import Path
 import threading
 import uuid
@@ -155,10 +156,44 @@ def smoke(root, runtime):
         failure = json.loads((slot / 'status.json').read_text())
         assert failure['phase'] == 'failed' and 'HTTP 403' in failure['message'], failure
         assert not failure.get('outputs'), failure
+        certificate = Path(__file__).with_name('localhost-cert.pem')
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certificate, Path(__file__).with_name('localhost-key.pem'))
+        secure_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, directory=str(root)))
+        secure_server.socket = context.wrap_socket(secure_server.socket, server_side=True)
+        secure_thread = threading.Thread(target=secure_server.serve_forever, daemon=True)
+        secure_thread.start()
+        secure_base = 'https://127.0.0.1:' + str(secure_server.server_port)
+        @contextlib.contextmanager
+        def secure_source(request, bridge):
+            with YoutubeDL(dict(quiet=True, no_warnings=True, skip_download=True, js_runtimes={})) as ydl:
+                yield ydl, [dict(entry, formats=[dict(fmt, url=fmt['url'].replace(base, secure_base)) for fmt in entry['formats']])]
+        try:
+            job, token = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()
+            slot = root / 'jobs' / job
+            slot.mkdir()
+            request = dict(id=job, token=token, url='https://youtu.be/native-fixture', platform='youtube',
+                quality='best', audioOnly=False, method='native', requiresSelection=True, outputProfile='auto')
+            runner.atomic_json(slot / 'request.json', request)
+            runner.run_job(root, job, runtime, extraction=secure_source, probe=True)
+            request['selection'] = 'video:best'
+            runner.atomic_json(slot / 'request.json', request)
+            with patch.object(download_engine, 'download_tracks', side_effect=AssertionError('HTTPS must use native FFmpeg')):
+                runner.run_job(root, job, runtime, extraction=secure_source)
+            result = json.loads((slot / 'status.json').read_text())
+            assert result['phase'] == 'complete', result
+            assert result['outputs'] == ['001.mp4'], result
+            metadata = json.loads((slot / 'probe.json').read_text())
+            assert {stream['codec_type'] for stream in metadata['streams']} == {'video', 'audio'}, metadata
+        finally:
+            secure_server.shutdown()
+            secure_server.server_close()
     finally:
         server.shutdown()
         server.server_close()
     runner.atomic_json(root / 'native-engine-tests.json', dict(passed=True, physicalIphone=False,
         execution='in-process CPython + FFmpeg on iOS Simulator',
         checks=results, repeatedCLI=True, ffprobeJSON=True,
-        failureDiagnostics=dict(http403Reported=True, incompleteOutputNotPublished=True)))
+        failureDiagnostics=dict(http403Reported=True, incompleteOutputNotPublished=True),
+        httpsDownload=dict(passed=True, transfer='native FFmpeg', certificateVerified=True,
+                           localFixture=True, output='mp4', streams=['video', 'audio'])))

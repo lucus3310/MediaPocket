@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <dlfcn.h>
 
 static MPCommandHandler command_handler;
 static MPWebViewHandler webview_handler;
@@ -39,9 +40,31 @@ static PyObject *configure_webview(PyObject *self, PyObject *arguments) {
     Py_END_ALLOW_THREADS
     Py_RETURN_NONE;
 }
+static PyObject *protocols(PyObject *self, PyObject *unused) {
+    void *library = dlopen("@rpath/libavformat.framework/libavformat", RTLD_NOW | RTLD_LOCAL);
+    const char *(*enumerate)(void **, int) = library ? dlsym(library, "avio_enum_protocols") : NULL;
+    if (!enumerate) {
+        if (library) dlclose(library);
+        PyErr_SetString(PyExc_RuntimeError, "Cannot inspect bundled FFmpeg input protocols");
+        return NULL;
+    }
+    PyObject *result = PyList_New(0);
+    void *state = NULL;
+    const char *name;
+    while (result && (name = enumerate(&state, 0))) {
+        PyObject *item = PyUnicode_FromString(name);
+        if (!item || PyList_Append(result, item) < 0) {
+            Py_XDECREF(item); Py_DECREF(result); result = NULL; break;
+        }
+        Py_DECREF(item);
+    }
+    dlclose(library);
+    return result;
+}
 static PyMethodDef methods[] = {
     {"execute", execute, METH_VARARGS, "Run the linked in-process FFmpeg engine."},
     {"configure_webview", configure_webview, METH_VARARGS, "Restrict resolver navigation and playback."},
+    {"protocols", protocols, METH_NOARGS, "Enumerate the linked FFmpeg input protocols."},
     {NULL, NULL, 0, NULL}
 };
 static struct PyModuleDef module = {PyModuleDef_HEAD_INIT, "_mediapocket", NULL, -1, methods};

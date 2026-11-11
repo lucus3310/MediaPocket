@@ -294,6 +294,8 @@ def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
                  "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
         if lines:
             args += ["-headers", "".join(lines)]
+        if urlparse(url).scheme == "https":
+            args += ["-tls_verify", "1"]
         args += ["-i", url]
     if audio_only:
         args += ["-map", "0:a:0", "-vn"]

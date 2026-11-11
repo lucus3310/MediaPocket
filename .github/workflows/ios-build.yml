@@ -88,5 +88,7 @@ jobs:
             build/KeyboardTests.xcresult
             build/NativeReleaseTests.xcresult
             build/NativeDiagnostics
+            build/native/FFmpegKit/build.log
+            build/native/FFmpegKit/mediapocket-https-build.log
           if-no-files-found: ignore
           retention-days: 1

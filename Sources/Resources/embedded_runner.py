@@ -36,6 +36,11 @@ def health(root, runtime):
             _plugins_loaded = True
         for module in ('yt_dlp_plugins.extractor.threads', 'yt_dlp_plugins.extractor.webkit_jsi', 'yt_dlp_plugins.extractor.ytjsc'):
             importlib.import_module(module)
+        protocols = root / 'native-protocols.txt'
+        available = set(_mediapocket.protocols())
+        protocols.write_text('\n'.join(sorted(available)) + '\n')
+        if not {'https', 'tls'} <= available:
+            raise RuntimeError('內建 FFmpeg 缺少 HTTPS／TLS，無法下載平台影片。請更新含 HTTPS 支援的 App。')
         if runtime.run(['ffmpeg', '-hide_banner', '-encoders'], root / 'native-encoders.txt', root / 'native-error.txt'):
             raise RuntimeError('內建 FFmpeg 未能啟動。')
         if 'aac' not in (root / 'native-encoders.txt').read_text():

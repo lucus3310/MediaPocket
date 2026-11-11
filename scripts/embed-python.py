@@ -22,8 +22,12 @@ shutil.copytree(native / 'packages', app / 'python-packages', dirs_exist_ok=True
                 ignore=shutil.ignore_patterns('__pycache__', '*.pyc', 'bin'))
 if os.environ['CONFIGURATION'] == 'Debug' or simulator:
     shutil.copy2(root / 'scripts/fixtures/native_engine_smoke.py', app / 'native_engine_smoke.py')
+    for name in ['localhost-cert.pem', 'localhost-key.pem']:
+        shutil.copy2(root / 'build/https-fixture' / name, app / name)
 else:
     (app / 'native_engine_smoke.py').unlink(missing_ok=True)
+    for name in ['localhost-cert.pem', 'localhost-key.pem']:
+        (app / name).unlink(missing_ok=True)
 for binary in list(stdlib.rglob('*.so')):
     relative = binary.relative_to(app)
     module = binary.name.split('.')[0]

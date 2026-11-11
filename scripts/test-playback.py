@@ -22,6 +22,7 @@ print(f"Playback test device: {device['name']} ({identifier})", flush=True)
 if device['state'] != 'Booted':
     run('xcrun', 'simctl', 'boot', identifier)
 run('xcrun', 'simctl', 'bootstatus', identifier, '-b', timeout=240)
+run('xcrun', 'simctl', 'keychain', identifier, 'add-root-cert', 'build/https-fixture/localhost-cert.cer')
 try:
     run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'MediaPocket',
     '-configuration', 'Debug', '-destination', f'id={identifier}',
