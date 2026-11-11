@@ -71,5 +71,7 @@ if not (packages / 'yt_dlp').exists():
 subprocess.run([sys.executable, str(ROOT / 'scripts/patch-resolver-webkit.py'),
                 str(packages / 'yt_dlp_plugins/webkit_jsi/lib/api.py')], check=True)
 (DEST / 'manifest.json').write_text(json.dumps({'python': '3.13-b18', 'ffmpegCommit': '0bd85df8f9693061f6f979414662baaf876a3e20',
-    'archives': {name: digest for name, (_, digest) in SOURCES.items()}, 'execution': 'in-process; no shell or helper application'}, indent=2))
+    'archives': {name: digest for name, (_, digest) in SOURCES.items()},
+    'httpsBuild': json.loads((DEST / 'FFmpegKit/.mediapocket-libavformat-https.json').read_text()),
+    'execution': 'in-process; no shell or helper application'}, indent=2))
 print('Pinned native FFmpeg and CPython are ready.')

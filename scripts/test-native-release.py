@@ -31,6 +31,7 @@ run('xcodebuild', 'test', '-project', 'MediaPocket.xcodeproj', '-scheme', 'Media
     'ENABLE_TESTABILITY=YES', 'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_REQUIRED=NO', timeout=900)
 container = Path(run('xcrun', 'simctl', 'get_app_container', identifier,
                      'io.github.lucus3310.MediaPocket', 'data', capture_output=True, text=True).stdout.strip())
+Path('build/artifacts/native-release-protocols.txt').write_text((container / 'Documents/NativeEngineTests/native-protocols.txt').read_text())
 for source, output in [('native-engine-tests.json', 'native-release-tests.json'), ('native-js-tests.json', 'native-release-js-tests.json')]:
     report = json.loads((container / 'Documents/NativeEngineTests' / source).read_text())
     if not report.get('passed'):

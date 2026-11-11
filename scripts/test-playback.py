@@ -51,6 +51,7 @@ native_report = json.loads((container / 'Documents/NativeEngineTests/native-engi
 if not native_report.get('passed'):
     raise RuntimeError('Native in-process download integration failed')
 shutil.copyfile(container / 'Documents/NativeEngineTests/native-engine-tests.json', 'build/artifacts/native-engine-tests.json')
+shutil.copyfile(container / 'Documents/NativeEngineTests/native-protocols.txt', 'build/artifacts/native-protocols.txt')
 js_report = json.loads((container / 'Documents/NativeEngineTests/native-js-tests.json').read_text())
 if not js_report.get('passed') or js_report.get('consoleResult') != 3:
     raise RuntimeError('Bundled WebKit console channel failed')

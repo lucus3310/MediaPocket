@@ -80,7 +80,9 @@ def enable(root):
         library['SupportedArchitectures'] = ['arm64']
         binaries[str(target.relative_to(root))] = hashlib.sha256(target.read_bytes()).hexdigest()
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
-    stamp.write_text(json.dumps({'backend': 'Apple SecureTransport', 'binaries': binaries}, indent=2))
+    revision = subprocess.check_output(['git', '-C', str(root / 'src/ffmpeg'), 'rev-parse', 'HEAD'], text=True).strip()
+    stamp.write_text(json.dumps({'backend': 'Apple SecureTransport', 'sourceCommit': revision,
+                                 'preservedExistingCodecLibraries': True, 'binaries': binaries}, indent=2))
     print('HTTPS-enabled ARM64 libavformat installed; existing codecs and CLI preserved')
 
 
