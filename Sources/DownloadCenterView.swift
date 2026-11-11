@@ -76,6 +76,7 @@ final class DownloadCenterModel {
             await refresh()
             try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
             await refresh()
+            reportFailure(request.id)
         } catch { self.error = error.localizedDescription }
     }
 
@@ -96,7 +97,13 @@ final class DownloadCenterModel {
             await refresh()
             try await NativeDownloadEngine.run("download", directory: store.directory, job: request.id)
             await refresh()
+            reportFailure(request.id)
         } catch { self.error = error.localizedDescription }
+    }
+    private func reportFailure(_ id: UUID) {
+        if let status = jobs.first(where: { $0.id == id })?.status, status.phase == "failed" {
+            error = status.message
+        }
     }
 }
 
@@ -176,6 +183,7 @@ struct DownloadCenterView: View {
         .refreshable { await model.refresh() }
         .sheet(isPresented: $showSetup) { DownloadSetupView(model: model) }
         .alert("下載提示", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+            Button("複製錯誤") { UIPasteboard.general.string = model.error ?? ""; model.error = nil }
             Button("知道了") { model.error = nil }
         } message: { Text(model.error ?? "") }
         .task {

@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, quote, urlparse
 import uuid
 import download_engine as engine
 
-VERSION = "0.10.2"
+VERSION = "0.10.3"
 PACKAGES = ["yt-dlp==2026.10.26", "yt-dlp-ejs==0.8.0",
             "yt-dlp-apple-webkit-jsi==0.1.1", "yt-dlp-threads==0.1.0"]
 MEDIA_PROTOCOLS = {"https", "http", "m3u8", "m3u8_native"}
@@ -149,6 +149,10 @@ def extractor(request, bridge):
     }
     if cookie.is_file() and not cookie.is_symlink():
         options["cookiefile"] = str(cookie)
+    if request["platform"] == "bilibili":
+        options["http_headers"] = {"Referer": request["url"], "Range": "bytes=0-"}
+    elif request["platform"] == "instagram":
+        options["http_headers"] = {"Referer": "https://www.instagram.com/"}
     with yt_dlp.YoutubeDL(options) as ydl:
         key = None
         if request["platform"] == "threads":
@@ -275,6 +279,8 @@ def apply_selection(entries, catalog, selection):
 
 def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-loglevel", "warning"]
+    # FFmpeg manages Range itself, including nonzero offsets when seeking.
+    # A fixed custom Range header would override that behavior.
     allowed = {"user-agent", "referer", "origin", "accept", "accept-language", "cookie"}
     for _, url, headers in inputs:
         lines = []
@@ -302,11 +308,40 @@ def ffmpeg_command(inputs, output, progress, audio_only, plan=None):
     return args + codecs + ["-progress", str(progress), "-f", muxer, str(output)]
 
 
+def ffmpeg_failure_detail(code, path, engine_name="FFmpeg"):
+    # Report known categories, never raw logs containing signed URLs or cookies.
+    try:
+        with Path(path).open("rb") as source:
+            source.seek(0, 2)
+            source.seek(max(0, source.tell() - 32768))
+            text = source.read().decode("utf-8", errors="replace")
+    except OSError:
+        text = ""
+    match = re.search(r"(?:HTTP error|Server returned)\s+(\d{3})\b", text, re.IGNORECASE)
+    if match:
+        status = match[1]
+        reason = "HTTP " + status + {"401": "（來源要求授權）", "403": "（來源拒絕存取）",
+            "404": "（來源不存在）", "429": "（來源限制請求頻率）"}.get(status, "（來源回應錯誤）")
+    else:
+        categories = [("certificate verify failed", "TLS 憑證驗證失敗"),
+            ("tls handshake", "TLS 連線失敗"), ("protocol not found", "內建 FFmpeg 不支援這個協定"),
+            ("connection timed out", "連線逾時"), ("operation timed out", "連線逾時"),
+            ("connection refused", "來源拒絕連線"), ("failed to resolve hostname", "無法解析來源主機名稱"),
+            ("unknown encoder", "內建 FFmpeg 缺少所選編碼器"),
+            ("error while opening encoder", "無法啟動所選編碼器"),
+            ("no space left on device", "手機可用空間不足"),
+            ("invalid data found when processing input", "來源不是可讀取的影音資料")]
+        reason = next((description for marker, description in categories if marker in text.lower()), "未取得可分類的錯誤，請保留任務紀錄")
+    return f"{engine_name} 回傳 {code}；{reason}"
+
+
 def verify_output(runtime, output, audio_only, slot, expected_audio=False):
     probe = slot / "probe.json"
     result = runtime.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(output)],
                          probe, slot / "probe-error.txt")
-    if result or not output.is_file() or output.stat().st_size <= 0:
+    if result:
+        raise ValueError("成品驗證失敗：" + ffmpeg_failure_detail(result, slot / "probe-error.txt", "ffprobe") + "；未匯入檔案庫。")
+    if not output.is_file() or output.stat().st_size <= 0:
         raise ValueError("FFmpeg 輸出驗證失敗；未將這個檔案匯入檔案庫。")
     metadata = json.loads(probe.read_text(encoding="utf-8"))
     kind = "audio" if audio_only else "video"
@@ -480,9 +515,10 @@ def _execute_job(bridge, slot, job_id, runtime, extraction, probe=False):
                     watcher.join(timeout=3)
                 check_cancel()
                 if result:
+                    detail = ffmpeg_failure_detail(result, slot / "ffmpeg-error.txt")
                     if staged:
-                        raise ValueError("FFmpeg 合併／轉碼失敗，已保留軌道暫存。請改用原編碼重試，或檢查裝置編碼器及可用空間；詳細錯誤在任務資料夾的 ffmpeg-error.txt。")
-                    raise ValueError("FFmpeg 下載失敗。來源可能已過期、限流或拒絕存取；請重新建立任務。詳細訊息在任務資料夾的 ffmpeg-error.txt，可能含來源網址，請勿公開分享。")
+                        raise ValueError("FFmpeg 合併／轉碼失敗：" + detail + "。已保留軌道暫存；詳細紀錄在任務資料夾的 ffmpeg-error.txt。")
+                    raise ValueError("FFmpeg 下載／轉檔失敗：" + detail + "。請重新取得畫質後重試；詳細紀錄在任務資料夾的 ffmpeg-error.txt。")
                 expected_audio = any(engine.audio(fmt) for fmt in (entry.get("requested_formats") or [entry])) if advanced else any(item[0].get("acodec") not in (None, "none") for item in inputs)
                 verify_output(runtime, temporary, request["audioOnly"], slot, expected_audio)
                 os.replace(temporary, final)

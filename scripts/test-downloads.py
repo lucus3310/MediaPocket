@@ -97,6 +97,34 @@ class Contracts(unittest.TestCase):
         self.assertNotIn("SECRET", text)
         self.assertNotIn("PRIVATE", text)
 
+    def test_ffmpeg_failure_reports_reason_without_source_tokens(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "ffmpeg-error.txt"
+            for text, expected in [("HTTP error 403 Forbidden", "HTTP 403"),
+                                   ("Server returned 429 Too Many Requests", "HTTP 429"),
+                                   ("Protocol not found", "協定"),
+                                   ("certificate verify failed", "TLS")]:
+                log.write_text(text + "\nhttps://cdn.test/media?token=SECRET\nCookie: PRIVATE", encoding="utf-8")
+                detail = runner.ffmpeg_failure_detail(1, log)
+                self.assertIn(expected, detail)
+                self.assertIn("1", detail)
+                self.assertNotIn("SECRET", detail)
+                self.assertNotIn("PRIVATE", detail)
+
+    def test_extractor_inherits_reference_platform_headers(self):
+        from yt_dlp import YoutubeDL
+        for platform, url, referer in [("bilibili", "https://www.bilibili.com/video/BV123/", "https://www.bilibili.com/video/BV123/"),
+                                       ("instagram", "https://www.instagram.com/reel/abc/", "https://www.instagram.com/")]:
+            captured = {}
+            def extract(ydl, *_args, **_kwargs):
+                captured.update(ydl.params)
+                return {"id": "fixture"}
+            with tempfile.TemporaryDirectory() as temporary, patch.object(YoutubeDL, "extract_info", extract):
+                with runner.extractor({"platform": platform, "url": url, "quality": "best", "audioOnly": False}, Path(temporary)):
+                    pass
+            self.assertEqual(captured["http_headers"]["Referer"], referer)
+            if platform == "bilibili": self.assertEqual(captured["http_headers"]["Range"], "bytes=0-")
+
     def test_real_ytdlp_cookiejar_contract(self):
         from yt_dlp.cookies import YoutubeDLCookieJar
         jar = YoutubeDLCookieJar()
@@ -301,6 +329,7 @@ class FFmpegIntegration(unittest.TestCase):
             tracks = {item["codec_type"] for item in probe["streams"]}
             self.assertEqual(tracks, {"audio"} if audio else {"video", "audio"})
             self.assertGreater(float(probe["format"]["duration"]), 1.8)
+            self.assertIn(0, self.server.range_requests)
             # A second callback/run must not duplicate or replace a completed file.
             size = output.stat().st_size
             runner.run_job(self.bridge, job_id, self.runtime, self.extraction)
@@ -511,6 +540,7 @@ class FFmpegIntegration(unittest.TestCase):
         status = json.loads((slot / "status.json").read_text())
         self.assertEqual(status["phase"], "failed")
         self.assertNotIn("outputs", status)
+        self.assertIn("HTTP 403", status["message"])
 
 
 if __name__ == "__main__":

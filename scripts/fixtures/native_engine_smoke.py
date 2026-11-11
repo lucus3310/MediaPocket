@@ -93,6 +93,11 @@ def smoke(root, runtime):
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *_): pass
+        def do_GET(self):
+            if self.path == '/denied.mp4':
+                self.send_error(403)
+                return
+            super().do_GET()
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, directory=str(root)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -133,9 +138,27 @@ def smoke(root, runtime):
             types = {stream['codec_type'] for stream in metadata['streams']}
             assert types == ({'audio'} if profile == 'mp3' else {'video', 'audio'}), types
             results.append(dict(mode=mode or 'FFmpeg HTTP', profile=profile, streams=sorted(types)))
+        # A successful catalog does not prove the media server accepts download.
+        # Exercise a real FFmpeg HTTP rejection without leaking a signed URL.
+        @contextlib.contextmanager
+        def rejected(request, bridge):
+            with YoutubeDL(dict(quiet=True, no_warnings=True, skip_download=True, js_runtimes={})) as ydl:
+                yield ydl, [dict(entry, requested_formats=[dict(entry['formats'][0], url=base + '/denied.mp4')])]
+        job, token = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()
+        slot = root / 'jobs' / job
+        slot.mkdir()
+        runner.atomic_json(slot / 'request.json', dict(id=job, token=token,
+            url='https://youtu.be/native-fixture', platform='youtube', quality='best', audioOnly=False,
+            method='native', outputProfile='original'))
+        with patch.object(download_engine, 'download_tracks', side_effect=AssertionError('No yt-dlp fallback')):
+            runner.run_job(root, job, runtime, extraction=rejected)
+        failure = json.loads((slot / 'status.json').read_text())
+        assert failure['phase'] == 'failed' and 'HTTP 403' in failure['message'], failure
+        assert not failure.get('outputs'), failure
     finally:
         server.shutdown()
         server.server_close()
     runner.atomic_json(root / 'native-engine-tests.json', dict(passed=True, physicalIphone=False,
         execution='in-process CPython + FFmpeg on iOS Simulator',
-        checks=results, repeatedCLI=True, ffprobeJSON=True))
+        checks=results, repeatedCLI=True, ffprobeJSON=True,
+        failureDiagnostics=dict(http403Reported=True, incompleteOutputNotPublished=True)))
